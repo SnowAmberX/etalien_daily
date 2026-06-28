@@ -1,6 +1,6 @@
 """HTTP 客户端模块。
 
-封装外星仔 API 的所有 HTTP 交互：
+封装ET API 的所有 HTTP 交互：
 - 请求签名（URL + 参数）
 - 客户端伪装（Headers 模拟 OkHttp/Android）
 - Protobuf 请求体序列化 / 响应体反序列化
@@ -36,7 +36,7 @@ AUTH_ERROR_CODES = {16, 401, 403}
 # ── ApiClient ─────────────────────────────────────────────────────
 
 class ApiClient:
-    """外星仔 API 客户端。
+    """ET API 客户端。
 
     每个账号对应一个 ApiClient 实例（独立的 device_id 和 auth_token）。
     """

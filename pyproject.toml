@@ -1,7 +1,7 @@
 [project]
 name = "etalien-daily"
 version = "1.0.0"
-description = "外星仔免广告领取加速时长"
+description = "ET免广告领取加速时长"
 requires-python = ">=3.11"
 dependencies = [
     "flask>=3.1.3",

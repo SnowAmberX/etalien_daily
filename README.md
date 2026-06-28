@@ -1,6 +1,6 @@
-# 外星仔免广告领取加速时长
+# etalien-daily
 
-自动领取外星仔（ET/Alien）加速器 VIP 时长，无需观看广告。
+自动领取加速器 VIP 时长，无需观看广告。
 
 基于 [etalien-auto](https://github.com/JiangXu26710/etalien-auto) 重写，SQLite 替代 JSON 存储，protoc 编译替代手写 protobuf，新增 CLI 子命令系统和单元测试。
 

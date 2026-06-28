@@ -1,6 +1,6 @@
 """请求签名算法模块。
 
-外星仔 App 内置 SignInterceptor 对所有 HTTP 请求进行签名校验。
+ET App 内置 SignInterceptor 对所有 HTTP 请求进行签名校验。
 本模块实现参数排序、SHA-256 签名计算和签名 URL 构建。
 """
 

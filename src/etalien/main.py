@@ -68,7 +68,7 @@ def _setup_logging(verbose: bool = False) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="etalien",
-        description="外星仔免广告领取加速时长",
+        description="ET免广告领取加速时长",
     )
     parser.add_argument(
         "--version", action="version", version=f"etalien-daily v{__version__}",
@@ -180,7 +180,7 @@ def _handle_claim(args: argparse.Namespace) -> None:
         print("  etalien account login <手机号>   登录获取 token")
         sys.exit(EXIT_NO_ENABLED)
 
-    print(f"外星仔免广告领取加速时长 v{__version__}")
+    print(f"ET免广告领取加速时长 v{__version__}")
     print("=" * 50)
     print(f"账号数: {len(accounts)} | 并发数: {settings['max_concurrent']}")
     print(f"请求间隔: {settings['request_interval']}s | 最大轮数: {settings['max_rounds']}")

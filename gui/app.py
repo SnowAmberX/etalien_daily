@@ -187,7 +187,7 @@ def main() -> None:
 
     # 创建窗口
     window = webview.create_window(
-        title="外星仔加速器 - 免广告自动领时长",
+        title="免广告领时长",
         url=url,
         width=width,
         height=height,
