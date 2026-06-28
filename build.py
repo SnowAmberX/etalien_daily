@@ -1,17 +1,19 @@
 """PyInstaller 打包脚本。"""
 
+import os
 import subprocess
 from pathlib import Path
 
 
 def main():
-    root = Path(__file__).parent
+    # 切换到脚本所在目录
+    os.chdir(Path(__file__).parent)
 
     subprocess.run(
         [
             "uv", "run", "pyinstaller",
             "--clean", "--noconfirm",
-            str(root / "etalien-daily.spec"),
+            "etalien-daily.spec",
         ],
         check=True,
     )
