@@ -93,7 +93,7 @@ etalien_daily/
 - 手写 protobuf → protoc 编译
 - 单文件 CLI → argparse 子命令系统
 - 新增单元测试（52 个）
-- GUI 布局重设计（三卡片统计栏、VIP 时长显示、广告进度条）
+- GUI 布局重设计
 - 新增 GUI 领取过程事件持久化
 - 新增 Windows Service 定时模式
 - 修复 pywebview 6.x 兼容性
