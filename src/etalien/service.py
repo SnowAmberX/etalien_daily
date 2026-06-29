@@ -212,12 +212,17 @@ def _claim_business_phase(
 ) -> tuple[int, int]:
     """对单个 business 类型执行回调循环。
 
+    与 etalien-auto 对齐：基于全局未观看广告数量判断进度，不再将 business 与 level 绑定。
+
     循环逻辑:
-    1. 查广告任务 → 看该 business 还有多少未观看
-    2. 全部完成 → 退出
-    3. 发送回调 → sleep(interval)
-    4. 再查任务 → 比较 watch_cnt 有无变化
-    5. 连续 MAX_STALLED_ROUNDS 轮无进展 → 退出（防死循环）
+    1. fetch_pc_ad_config() → 统计全局 unwatched_before
+    2. unwatched_before == 0 → 全部完成，退出
+    3. pc_ad_callback_backup(AD_ID, business) → 仅用 business 作为请求参数
+    4. sleep(request_interval)
+    5. 再次 fetch_pc_ad_config() → 统计 unwatched_after
+    6. unwatched_after < unwatched_before → 有进展，重置 stalled_rounds
+    7. unwatched_after == unwatched_before → stalled_rounds += 1
+    8. 连续 MAX_STALLED_ROUNDS 轮无进展 → 退出（防死循环）
 
     Returns:
         (claimed 成功次数, failed 失败次数)
@@ -225,71 +230,88 @@ def _claim_business_phase(
     claimed = 0
     failed = 0
     stalled_rounds = 0
+    round_num = 0
     request_interval = settings.get("request_interval", 1.0)
     max_rounds = settings.get("max_rounds", 21)
 
-    for round_num in range(max_rounds):
+    while round_num < max_rounds:
         # 检查 token
         if not client.get_auth_token():
-            logger.warning("Token 无效，停止领取: %s business=%d", phone, business)
+            logger.warning("[%s] Token 无效，停止领取 business=%d", phone, business)
             break
 
-        # 查任务
+        # 查任务 → 统计全局未观看数量
         config = client.fetch_pc_ad_config()
         if config.get("_error"):
-            logger.warning("获取任务列表失败: %s", config.get("msg"))
+            logger.warning("[%s] 获取任务列表失败 business=%d: %s", phone, business, config.get("msg"))
             failed += 1
             continue
 
-        # 找到对应 business 的 level
-        level_item = _find_business_level(config, business)
-        if level_item is None:
-            # 该 business 没有任务，跳过
+        tasks = config.get("list", [])
+        unwatched_before = get_unwatched_count(tasks)
+
+        # 全局所有广告都已观看，退出
+        if unwatched_before == 0:
+            logger.info("[%s] business=%d 全局广告已全部观看，退出", phone, business)
             break
 
-        watch_cnt_before = int(level_item.get("watch_cnt", 0))
-        total_cnt = len(level_item.get("list", []))
-        if total_cnt > 0 and watch_cnt_before >= total_cnt:
-            # 该 business 全部完成
-            _report(progress_callback, phone, f"b{business}", f"business={business} 已完成 ({watch_cnt_before}/{total_cnt})")
-            break
+        round_num += 1
 
-        # 发送回调
+        # 发送回调 — business 仅作为请求参数
+        logger.info(
+            "[%s] business=%d round=%d unwatched_before=%d stalled=%d → 发送回调",
+            phone, business, round_num, unwatched_before, stalled_rounds,
+        )
         _report(progress_callback, phone, f"b{business}_r{round_num}",
-                f"business={business} 第{round_num+1}轮 ({watch_cnt_before}/{total_cnt})")
+                f"business={business} 第{round_num}轮 (unwatched={unwatched_before})")
+
         result = client.pc_ad_callback_backup(AD_ID, business)
+        is_verify = bool(result.get("is_verify", False))
 
         if result.get("_error"):
             if _is_auth_error(result):
                 client.clear_auth_token()
                 failed += 1
+                logger.warning("[%s] business=%d 认证错误，退出", phone, business)
                 break
-            logger.warning("回调失败 (b=%d): %s", business, result.get("msg"))
+            logger.warning("[%s] 回调失败 business=%d round=%d: %s", phone, business, round_num, result.get("msg"))
             failed += 1
-        elif result.get("is_verify"):
+        elif is_verify:
             claimed += 1
+            logger.info("[%s] business=%d round=%d is_verify=True claimed=%d", phone, business, round_num, claimed)
         else:
             failed += 1
+            logger.info("[%s] business=%d round=%d is_verify=False failed=%d", phone, business, round_num, failed)
 
         # 等待间隔
         time.sleep(request_interval)
 
-        # 再查任务看进展
+        # 再查任务 → 比较全局未观看数量变化
         config2 = client.fetch_pc_ad_config()
         if config2.get("_error"):
+            logger.warning("[%s] 获取任务列表失败 business=%d (after callback)", phone, business)
             continue
 
-        level_item2 = _find_business_level(config2, business)
-        if level_item2 is None:
-            break
+        tasks2 = config2.get("list", [])
+        unwatched_after = get_unwatched_count(tasks2)
 
-        watch_cnt_after = int(level_item2.get("watch_cnt", 0))
-        if watch_cnt_after > watch_cnt_before:
+        logger.info(
+            "[%s] business=%d round=%d unwatched_before=%d unwatched_after=%d is_verify=%s stalled=%d",
+            phone, business, round_num, unwatched_before, unwatched_after, is_verify, stalled_rounds,
+        )
+
+        if unwatched_after < unwatched_before:
             stalled_rounds = 0  # 有进展，重置
         else:
             stalled_rounds += 1
+            logger.info(
+                "[%s] business=%d round=%d 无进展 stalled=%d/%d",
+                phone, business, round_num, stalled_rounds, MAX_STALLED_ROUNDS,
+            )
             if stalled_rounds >= MAX_STALLED_ROUNDS:
-                _report(progress_callback, phone, f"b{business}", f"business={business} 连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                _report(progress_callback, phone, f"b{business}",
+                        f"business={business} 连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                logger.info("[%s] business=%d 连续%d轮无进展，停止", phone, business, MAX_STALLED_ROUNDS)
                 break
 
     return claimed, failed
@@ -354,6 +376,29 @@ def _report(callback: Callable | None, phone: str, step: str, detail: str) -> No
             logger.warning("进度回调异常: %s", e)
 
 
+def _get_level_items(level: dict) -> list:
+    """获取 level 中的广告 item 列表，兼容 items 和 list 两种字段名。
+
+    etalien-auto 的 client.py 手动构建 dict 时把 protobuf 的 list 字段重命名为 items；
+    etalien_daily 的 client.py 使用 preserving_proto_field_name=True 保留原名字 list。
+    此函数兼容两种格式。
+    """
+    return level.get("items") or level.get("list") or []
+
+
+def get_unwatched_count(tasks: list) -> int:
+    """统计所有 level 中未观看广告的总数（全局计数）。
+
+    遍历所有 level 的所有 item，统计 is_watch 为 False 的数量。
+    """
+    return sum(
+        1
+        for level in tasks
+        for item in _get_level_items(level)
+        if not bool(item.get("is_watch", False))
+    )
+
+
 def _is_auth_error(result: dict) -> bool:
     """判断响应是否为认证错误。"""
     if not result.get("_error"):
@@ -362,27 +407,8 @@ def _is_auth_error(result: dict) -> bool:
 
 
 def _all_ads_watched(config: dict) -> bool:
-    """检查所有广告是否都已观看。"""
-    levels = config.get("list", [])
-    if not levels:
-        return True
-    for level in levels:
-        items = level.get("list", [])
-        if not items:
-            continue
-        watch_cnt = int(level.get("watch_cnt", 0))
-        if watch_cnt < len(items):
-            return False
-    return True
-
-
-def _find_business_level(config: dict, business: int) -> dict | None:
-    """在任务列表中查找指定 business 的 level 条目。"""
-    levels = config.get("list", [])
-    for level in levels:
-        if int(level.get("level", 0)) == business:
-            return level
-    return None
+    """检查所有广告是否都已观看（基于全局 is_watch 字段）。"""
+    return get_unwatched_count(config.get("list", [])) == 0
 
 
 def _save_claim_record(account_id: int, result: dict) -> None:
