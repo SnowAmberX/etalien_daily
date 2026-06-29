@@ -81,8 +81,7 @@ etalien_daily/
 │   ├── api.py               # Flask REST API
 │   ├── __init__.py           # ClaimManager 进度追踪器
 │   └── static/              # 前端 (HTML/CSS/JS)
-├── tests/                   # 单元测试
-└── docs/IMPLEMENTATION.md   # 协议逆向文档
+└── tests/                   # 单元测试
 ```
 
 ## 参考

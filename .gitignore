@@ -17,6 +17,7 @@ venv/
 
 # Project data
 config/etalien.db
+/docs
 
 # OS
 .DS_Store
