@@ -5,6 +5,7 @@
 
 import copy
 import threading
+import uuid
 from typing import Any
 
 
@@ -26,6 +27,7 @@ class ClaimManager:
     def __init__(self):
         self._lock = threading.Lock()
         self._running = False
+        self._run_id: str | None = None
         self._progress: list[dict[str, Any]] = []
 
     @property
@@ -33,29 +35,32 @@ class ClaimManager:
         with self._lock:
             return self._running
 
-    def start(self) -> bool:
-        """开始一次领取。返回 False 表示已有领取在运行。"""
+    def start(self) -> str | None:
+        """开始一次领取。返回 run_id，若已在运行则返回 None。"""
         with self._lock:
             if self._running:
-                return False
+                return None
             self._running = True
+            self._run_id = uuid.uuid4().hex
             self._progress = []
-            return True
+            return self._run_id
 
     def finish(self) -> None:
         """结束领取。"""
         with self._lock:
             self._running = False
+            self._run_id = None
 
     def get_progress(self) -> dict:
         """获取当前进度（前端轮询）。
 
         Returns:
-            {"running": bool, "progress": list[dict]}
+            {"running": bool, "run_id": str|None, "progress": list[dict]}
         """
         with self._lock:
             return {
                 "running": self._running,
+                "run_id": self._run_id,
                 "progress": copy.deepcopy(self._progress),
             }
 

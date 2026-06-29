@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -17,17 +18,20 @@ from etalien.client import ApiClient
 from etalien.db import (
     Account,
     add_account,
+    add_claim_event,
     delete_account,
     get_account,
     get_accounts,
+    get_claim_events,
     get_claim_history,
     get_settings,
+    get_week_start_ts,
     init_db,
     update_account,
     update_account_token,
     update_settings,
 )
-from etalien.service import run_concurrent_claim
+from etalien.service import get_ad_progress_from_config, run_concurrent_claim
 from gui import claim_manager
 
 logger = logging.getLogger(__name__)
@@ -207,37 +211,121 @@ def create_app() -> Flask:
 
     @app.route("/api/status", methods=["GET"])
     def account_status():
-        """获取所有启用账号的状态（VIP 时长等）。"""
-        accounts = get_accounts(enabled_only=True)
+        """获取所有账号状态（VIP 时长、广告进度、Token 状态等）。"""
+        accounts = get_accounts(enabled_only=False)
         if not accounts:
             return jsonify([])
 
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def _fetch_status(acc):
             client = ApiClient(device_id=acc.device_id, auth_token=acc.auth_token)
-            if not acc.auth_token or not client.check_token_valid():
-                return {"phone": acc.phone, "name": acc.name, "status": "need_login", "vip_seconds": 0}
-            dur = client.fetch_pc_duration()
-            if dur.get("_error"):
-                return {"phone": acc.phone, "name": acc.name, "status": "error", "vip_seconds": 0}
-            return {
+            base = {
                 "phone": acc.phone,
                 "name": acc.name,
-                "status": "ok",
-                "vip_seconds": dur.get("vip_duration_second", 0),
-                "free_seconds": dur.get("free_duration_second", 0),
+                "remark": acc.remark,
+                "enabled": acc.enabled,
+            }
+
+            if not acc.auth_token:
+                return {
+                    **base,
+                    "logged_in": False,
+                    "token_valid": False,
+                    "token_expired": False,
+                    "status": "need_login",
+                    "vip_duration": 0,
+                    "free_duration": 0,
+                    "progress": "-/-",
+                    "current": 0,
+                    "total": 0,
+                }
+
+            if not client.check_token_valid():
+                return {
+                    **base,
+                    "logged_in": True,
+                    "token_valid": False,
+                    "token_expired": True,
+                    "status": "need_login",
+                    "vip_duration": 0,
+                    "free_duration": 0,
+                    "progress": "-/-",
+                    "current": 0,
+                    "total": 0,
+                }
+
+            dur = client.fetch_pc_duration()
+            config = client.fetch_pc_ad_config()
+
+            vip = int(dur.get("vip_duration_second", 0))
+            free = int(dur.get("free_duration_second", 0))
+
+            if config.get("_error") or dur.get("_error"):
+                return {
+                    **base,
+                    "logged_in": True,
+                    "token_valid": True,
+                    "token_expired": False,
+                    "status": "error",
+                    "vip_duration": vip,
+                    "free_duration": free,
+                    "progress": "-/-",
+                    "current": 0,
+                    "total": 0,
+                }
+
+            watched, total = get_ad_progress_from_config(config)
+            progress_str = f"{watched}/{total}"
+            status = "all_done" if total > 0 and watched >= total else "ok"
+
+            return {
+                **base,
+                "logged_in": True,
+                "token_valid": True,
+                "token_expired": False,
+                "status": status,
+                "vip_duration": vip,
+                "free_duration": free,
+                "progress": progress_str,
+                "current": watched,
+                "total": total,
             }
 
         with ThreadPoolExecutor(max_workers=min(len(accounts), 10)) as executor:
-            results = list(executor.map(_fetch_status, accounts))
+            futures = {executor.submit(_fetch_status, acc): acc for acc in accounts}
+            results = []
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    acc = futures[future]
+                    logger.error("获取状态异常 (%s): %s", acc.phone, e)
+                    results.append({
+                        "phone": acc.phone,
+                        "name": acc.name or "",
+                        "remark": acc.remark or "",
+                        "enabled": acc.enabled,
+                        "logged_in": bool(acc.auth_token),
+                        "token_valid": False,
+                        "token_expired": False,
+                        "status": "error",
+                        "vip_duration": 0,
+                        "free_duration": 0,
+                        "progress": "-/-",
+                        "current": 0,
+                        "total": 0,
+                    })
+
+        results.sort(key=lambda r: r["phone"])
         return jsonify(results)
 
     # ── 领取 ────────────────────────────────────────────────
 
     @app.route("/api/claim", methods=["POST"])
     def start_claim():
-        if not claim_manager.start():
+        run_id = claim_manager.start()
+        if not run_id:
             return jsonify({"error": "领取任务已在运行中"}), 409
 
         accounts = get_accounts(enabled_only=True)
@@ -246,6 +334,7 @@ def create_app() -> Flask:
             return jsonify({"error": "没有启用的账号"}), 400
 
         settings = get_settings()
+        account_map = {acc.phone: acc for acc in accounts}
 
         # 为每个账号添加初始进度条目
         for acc in accounts:
@@ -259,8 +348,8 @@ def create_app() -> Flask:
                 "error": None,
             })
 
-        def _progress_callback(phone, step, detail):
-            """将 service 的回调转为进度条目更新。"""
+        def _progress_callback(phone, step, detail, **extra):
+            """将 service 的回调转为进度条目更新 + DB 事件记录。"""
             updates = {}
             if step == "done" or step == "after":
                 updates["status"] = "done"
@@ -273,13 +362,48 @@ def create_app() -> Flask:
                 updates["status"] = "need_login"
                 updates["error"] = detail
             elif step.startswith("b"):
-                # 业务类型回调，detail 格式: "business=X 第N轮 (W/T)"
                 updates["detail"] = detail
+
+            # 从 extra 中提取进度数值
+            if "current" in extra:
+                updates["current"] = extra["current"]
+            if "total" in extra:
+                updates["total"] = extra["total"]
+            if "vip_before" in extra:
+                updates["vip_before"] = extra["vip_before"]
+            if "vip_after" in extra:
+                updates["vip_after"] = extra["vip_after"]
+
             claim_manager.update_progress_entry(phone, updates)
+
+            # 写入领取事件到数据库
+            try:
+                acc = account_map.get(phone)
+                if acc:
+                    add_claim_event(
+                        run_id=run_id,
+                        account_id=acc.id,
+                        phone=phone,
+                        status=updates.get("status", "running"),
+                        step=step,
+                        detail=detail,
+                        current=extra.get("current", 0),
+                        total=extra.get("total", 0),
+                        vip_before=extra.get("vip_before", 0),
+                        vip_after=extra.get("vip_after", 0),
+                        error=updates.get("error", ""),
+                        source="gui",
+                    )
+            except Exception as e:
+                logger.warning("保存领取事件失败: %s", e)
 
         def _run():
             try:
-                results = run_concurrent_claim(accounts, settings, progress_callback=_progress_callback)
+                results = run_concurrent_claim(
+                    accounts, settings,
+                    progress_callback=_progress_callback,
+                    source="gui",
+                )
                 # 用最终结果更新进度
                 for r in results:
                     claim_manager.update_progress_entry(r["phone"], {
@@ -535,8 +659,32 @@ def create_app() -> Flask:
     @app.route("/api/history", methods=["GET"])
     def claim_history():
         limit = request.args.get("limit", 50, type=int)
-        history = get_claim_history(limit=limit)
-        return jsonify(history)
+        week_start = request.args.get("week_start", None, type=float)
+        source = request.args.get("source", None, type=str)
+
+        if week_start is None:
+            week_start = get_week_start_ts(time.time())
+
+        # 获取 service 最终记录
+        service_records = get_claim_history(
+            limit=limit,
+            week_start=week_start,
+            source=("service" if not source or source == "service" else source),
+        )
+
+        # 获取 GUI 过程事件
+        gui_events = []
+        if not source or source == "gui":
+            gui_events = get_claim_events(
+                week_start=week_start,
+                limit=limit,
+            )
+
+        return jsonify({
+            "week_start": week_start,
+            "service": service_records,
+            "gui": gui_events,
+        })
 
     return app
 

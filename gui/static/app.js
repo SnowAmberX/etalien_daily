@@ -139,12 +139,26 @@ document.addEventListener('click', (e) => {
 // ── Accounts ──────────────────────────────────────────────
 async function loadAccounts() {
   try {
-    const accounts = await api('/api/accounts');
-    const enabled = accounts.filter(a => a.enabled);
-    animateValue('stat-total', accounts.length);
-    animateValue('stat-enabled', enabled.length);
-    renderAccountCards(accounts);
+    const statusList = await api('/api/status');
+    renderAccountCards(statusList);
+    computeStats(statusList);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function computeStats(statusList) {
+  const total = statusList.length;
+  const enabled = statusList.filter(a => a.enabled).length;
+  let totalCurrent = 0, totalTotal = 0;
+  for (const acc of statusList) {
+    if (acc.token_valid) {
+      totalCurrent += acc.current || 0;
+      totalTotal += acc.total || 0;
+    }
+  }
+  const pct = totalTotal > 0 ? Math.round(totalCurrent / totalTotal * 100) : 0;
+  animateValue('stat-total', total);
+  animateValue('stat-enabled', enabled);
+  document.getElementById('stat-progress').textContent = pct + '%';
 }
 
 function renderAccountCards(accounts) {
@@ -153,24 +167,36 @@ function renderAccountCards(accounts) {
     strip.innerHTML = '<div class="hint" style="padding:24px 0">暂无账号，点击"+ 添加账号"开始</div>';
     return;
   }
-  strip.innerHTML = accounts.map(acc => `
-    <div class="account-card" data-phone="${escapeHtml(acc.phone)}">
+  strip.innerHTML = accounts.map(acc => {
+    const progressPct = acc.token_valid && acc.total > 0 ? Math.min(100, Math.round((acc.current || 0) / acc.total * 100)) : 0;
+    const progressStr = acc.token_valid ? `${acc.current || 0}/${acc.total || 0}` : '-/-';
+    const vipStr = acc.token_valid ? 'VIP: ' + fmtDuration(acc.vip_duration || 0) : '';
+    const needsLogin = !acc.logged_in || !acc.token_valid;
+    const statusClass = acc.status === 'ok' || acc.status === 'all_done' ? 'ok'
+      : acc.status === 'error' ? 'error'
+      : needsLogin ? 'waiting'
+      : 'ok';
+
+    return `<div class="account-card" data-phone="${escapeHtml(acc.phone)}" data-current="${acc.current || 0}" data-total="${acc.total || 0}">
       <button class="acct-del-btn" onclick="removeAccount('${escapeHtml(acc.phone)}')" title="删除">×</button>
       <div class="acct-menu-wrap">
         <button class="acct-menu-btn" onclick="toggleMenu(event, '${escapeHtml(acc.phone)}')">⋯</button>
         <div class="acct-menu" id="menu-${escapeHtml(acc.phone)}">
-          ${!acc.user_id ? `<button class="acct-menu-item" onclick="startLogin('${escapeHtml(acc.phone)}')">登录</button>` : ''}
+          ${needsLogin ? `<button class="acct-menu-item" onclick="startLogin('${escapeHtml(acc.phone)}')">登录</button>` : ''}
           <button class="acct-menu-item" onclick="editAccount('${escapeHtml(acc.phone)}')">编辑</button>
           <button class="acct-menu-item" onclick="toggleAccount('${escapeHtml(acc.phone)}', ${!acc.enabled})">${acc.enabled ? '禁用' : '启用'}</button>
         </div>
       </div>
       <div class="acct-phone">${escapeHtml(maskPhone(acc.phone))}</div>
       <div class="acct-name">${escapeHtml(acc.name || '-')}</div>
-      <span class="acct-status ${acc.user_id ? 'ok' : acc.enabled ? 'waiting' : 'error'}">
-        ${!acc.enabled ? '已禁用' : acc.user_id ? '已登录' : '未登录'}
-      </span>
-    </div>
-  `).join('');
+      ${acc.token_valid && vipStr ? `<div class="acct-vip">${vipStr}</div>` : ''}
+      <div class="account-progress-wrap">
+        <div class="account-progress-fill" style="width:${progressPct}%"></div>
+      </div>
+      <div class="account-progress-label">${progressStr}</div>
+      <span class="acct-status ${statusClass}">${statusLabel(acc.status)}</span>
+    </div>`;
+  }).join('');
 }
 
 // -- Action menu --
@@ -252,11 +278,10 @@ async function toggleAccount(phone, enabled) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function refreshStatus() {
+async function refreshStatus(noToast) {
   try {
-    await api('/api/status');
-    loadAccounts();
-    toast('已刷新', 'success');
+    await loadAccounts();
+    if (!noToast) toast('已刷新', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -328,6 +353,11 @@ async function pollClaimProgress() {
     const entries = data.progress || [];
     renderClaimProgress(entries);
 
+    // Update account card progress bars in real-time
+    for (const e of entries) {
+      updateCardProgress(e.phone, e.current || 0, e.total || 0);
+    }
+
     // Add log entries for state changes
     for (const e of entries) {
       if (e._logged !== e.status) {
@@ -348,8 +378,39 @@ async function pollClaimProgress() {
       document.getElementById('btn-claim-start').disabled = false;
       document.getElementById('btn-claim-start').textContent = '开始领取';
       if (entries.length) renderClaimResults(entries);
+      // Reload real status after claim completes
+      await loadAccounts();
     }
   } catch (_) {}
+}
+
+function updateCardProgress(phone, current, total) {
+  const card = document.querySelector('.account-card[data-phone="' + phone + '"]');
+  if (!card) return;
+  card.dataset.current = current;
+  card.dataset.total = total;
+  const fill = card.querySelector('.account-progress-fill');
+  const label = card.querySelector('.account-progress-label');
+  if (fill) {
+    const pct = total > 0 ? Math.min(100, Math.round(current / total * 100)) : 0;
+    fill.style.width = pct + '%';
+    if (pct >= 100) fill.classList.add('complete');
+  }
+  if (label) label.textContent = `${current}/${total}`;
+  recalcStatsFromCards();
+}
+
+function recalcStatsFromCards() {
+  const cards = document.querySelectorAll('.account-card');
+  let totalCurrent = 0, totalTotal = 0;
+  for (const card of cards) {
+    const c = parseInt(card.dataset.current) || 0;
+    const t = parseInt(card.dataset.total) || 0;
+    totalCurrent += c;
+    totalTotal += t;
+  }
+  const pct = totalTotal > 0 ? Math.round(totalCurrent / totalTotal * 100) : 0;
+  document.getElementById('stat-progress').textContent = pct + '%';
 }
 
 function renderClaimProgress(entries) {
@@ -516,13 +577,31 @@ async function saveSettings() {
 // ── History ─────────────────────────────────────────────────
 async function showHistory() {
   try {
-    const history = await api('/api/history?limit=50');
+    const data = await api('/api/history?limit=50');
+    // Combine service records + gui events
+    const records = [
+      ...(data.service || []).map(r => ({
+        time: r.claimed_at, phone: r.phone || '-',
+        status: r.status,
+        gained: (r.vip_after || 0) - (r.vip_before || 0),
+        source: 'service',
+      })),
+      ...(data.gui || []).map(r => ({
+        time: r.event_at, phone: r.phone || '-',
+        status: r.status,
+        gained: (r.vip_after || 0) - (r.vip_before || 0),
+        source: 'gui',
+        detail: r.detail,
+      })),
+    ];
+    records.sort((a, b) => (b.time || 0) - (a.time || 0));
+
     const c = document.getElementById('history-list-inner');
-    if (!history.length) { c.innerHTML = '<div class="hint" style="padding:20px 0">暂无领取记录</div>'; }
+    if (!records.length) { c.innerHTML = '<div class="hint" style="padding:20px 0">暂无领取记录</div>'; }
     else {
-      c.innerHTML = history.map(h => {
-        const g = (h.vip_after || 0) - (h.vip_before || 0);
-        return '<div class="history-item"><span class="history-time">' + fmtTime(h.claimed_at) + '</span><span>' + escapeHtml(h.phone || '-') + '</span><span class="history-status" style="color:' + (h.status === 'ok' ? 'var(--sage)' : 'var(--ember)') + '">' + statusLabel(h.status) + '</span><span class="spacer"></span><span style="color:var(--amber)">+' + fmtDuration(Math.max(0, g)) + '</span></div>';
+      c.innerHTML = records.slice(0, 50).map(h => {
+        const g = h.gained || 0;
+        return '<div class="history-item"><span class="history-time">' + fmtTime(h.time) + '</span><span>' + escapeHtml(h.phone) + '</span><span class="history-status" style="color:' + (h.status === 'ok' || h.status === 'done' || h.status === 'all_done' ? 'var(--sage)' : 'var(--ember)') + '">' + statusLabel(h.status) + '</span><span class="spacer"></span><span style="color:var(--amber)">+' + fmtDuration(Math.max(0, g)) + '</span></div>';
       }).join('');
     }
     showModal('dlg-history');
@@ -532,7 +611,7 @@ async function showHistory() {
 // ── Helpers ────────────────────────────────────────────────
 function maskPhone(p) { return p && p.length > 6 ? p.substring(0,3) + '****' + p.slice(-4) : p; }
 function statusLabel(s) {
-  const m = { ok:'成功',done:'完成',already_done:'已完成',running:'进行中',error:'错误',auth_error:'认证失败',need_login:'需登录',partial:'部分完成' };
+  const m = { ok:'正常',all_done:'已完成',done:'完成',already_done:'已完成',running:'进行中',error:'错误',auth_error:'认证失败',need_login:'需登录',partial:'部分完成' };
   return m[s] || s;
 }
 function fmtDuration(s) {

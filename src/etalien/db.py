@@ -8,6 +8,7 @@
     数据库文件: <config_dir>/etalien.db
 """
 
+import datetime
 import os
 import sqlite3
 import sys
@@ -48,6 +49,37 @@ def get_db_path() -> str:
 
 # ── 数据库初始化 ──────────────────────────────────────────────────
 
+def get_week_start_ts(ts: float | None = None) -> float:
+    """返回指定时间戳所在自然周的周一 00:00 时间戳。
+
+    Args:
+        ts: Unix 时间戳，为 None 时使用当前时间。
+
+    Returns:
+        该周周一零点的 Unix 时间戳。
+    """
+    if ts is None:
+        ts = time.time()
+    dt = datetime.datetime.fromtimestamp(ts)
+    monday = dt - datetime.timedelta(days=dt.weekday())
+    monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    return monday.timestamp()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
+    """幂等添加列——如果列不存在则在表中添加。
+
+    Args:
+        conn: 数据库连接。
+        table: 表名。
+        column_def: 列定义，例如 "week_start REAL DEFAULT 0"。
+    """
+    col_name = column_def.split()[0]
+    cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if col_name not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
+
 def init_db(db_path: str | None = None) -> None:
     """初始化数据库：创建表、PRAGMA 设置、写入默认值（幂等）。"""
     if db_path is None:
@@ -58,6 +90,16 @@ def init_db(db_path: str | None = None) -> None:
         conn.execute("PRAGMA foreign_keys=ON")
 
         conn.executescript(_SCHEMA_SQL)
+
+        # 幂等迁移：为旧 claim_history 表补充新列
+        _ensure_column(conn, "claim_history", "week_start REAL DEFAULT 0")
+        _ensure_column(conn, "claim_history", "source TEXT DEFAULT 'service'")
+        _ensure_column(conn, "claim_history", "detail TEXT DEFAULT ''")
+        # 回填旧数据的 week_start（粗略用当前周）
+        conn.execute(
+            "UPDATE claim_history SET week_start = ? WHERE week_start IS NULL OR week_start = 0",
+            (get_week_start_ts(),),
+        )
 
         # 写入默认设置（如果不存在）
         now = time.time()
@@ -104,6 +146,24 @@ CREATE TABLE IF NOT EXISTS claim_history (
     claimed_count INTEGER DEFAULT 0,
     failed_count  INTEGER DEFAULT 0,
     status        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS claim_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      TEXT NOT NULL,
+    account_id  INTEGER NOT NULL REFERENCES accounts(id),
+    phone       TEXT NOT NULL,
+    event_at    REAL NOT NULL,
+    week_start  REAL NOT NULL,
+    source      TEXT DEFAULT 'gui',
+    status      TEXT NOT NULL,
+    step        TEXT DEFAULT '',
+    detail      TEXT DEFAULT '',
+    current     INTEGER DEFAULT 0,
+    total       INTEGER DEFAULT 0,
+    vip_before  INTEGER DEFAULT 0,
+    vip_after   INTEGER DEFAULT 0,
+    error       TEXT DEFAULT ''
 );
 """
 
@@ -384,18 +444,25 @@ def add_claim_record(
     vip_after: int = 0,
     claimed_count: int = 0,
     failed_count: int = 0,
+    week_start: float | None = None,
+    source: str = "service",
+    detail: str = "",
     db_path: str | None = None,
 ) -> None:
     """写入一条领取记录。"""
+    if week_start is None:
+        week_start = get_week_start_ts()
     conn = get_connection(db_path)
     try:
         conn.execute(
             """INSERT INTO claim_history
                (account_id, claimed_at, vip_before, vip_after,
-                claimed_count, failed_count, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                claimed_count, failed_count, status,
+                week_start, source, detail)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (account_id, time.time(), vip_before, vip_after,
-             claimed_count, failed_count, status),
+             claimed_count, failed_count, status,
+             week_start, source, detail),
         )
         conn.commit()
     finally:
@@ -405,30 +472,148 @@ def add_claim_record(
 def get_claim_history(
     account_id: int | None = None,
     limit: int = 100,
+    week_start: float | None = None,
+    source: str | None = None,
     db_path: str | None = None,
 ) -> list[dict]:
-    """查询领取历史。"""
+    """查询领取历史。
+
+    Args:
+        account_id: 按账号 id 筛选，None 为全部。
+        limit: 最大返回条数。
+        week_start: 按周起始时间戳筛选，None 为不限制。
+        source: 按来源筛选（"service"/"gui"），None 为不限制。
+    """
     conn = get_connection(db_path)
     try:
+        where_clauses = []
+        params = []
+
         if account_id is not None:
+            where_clauses.append("ch.account_id = ?")
+            params.append(account_id)
+        if week_start is not None:
+            where_clauses.append("ch.week_start = ?")
+            params.append(week_start)
+        if source is not None:
+            where_clauses.append("ch.source = ?")
+            params.append(source)
+
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+        params.append(limit)
+
+        rows = conn.execute(
+            f"""SELECT ch.*, a.phone
+               FROM claim_history ch
+               JOIN accounts a ON ch.account_id = a.id
+               WHERE {where_sql}
+               ORDER BY ch.claimed_at DESC
+               LIMIT ?""",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+# ── 领取事件日志 ──────────────────────────────────────────────────
+
+def add_claim_event(
+    run_id: str,
+    account_id: int | None,
+    phone: str,
+    status: str,
+    step: str = "",
+    detail: str = "",
+    current: int = 0,
+    total: int = 0,
+    vip_before: int = 0,
+    vip_after: int = 0,
+    error: str = "",
+    source: str = "gui",
+    db_path: str | None = None,
+) -> None:
+    """写入一条领取过程事件日志。
+
+    Args:
+        run_id: 本次领取运行的唯一 ID。
+        account_id: 关联账号 id。
+        phone: 手机号。
+        status: 状态标签。
+        step: 步骤名（如 "config", "b1_r0", "done"）。
+        detail: 步骤描述。
+        current: 当前已完成数。
+        total: 总任务数。
+        vip_before: 领取前 VIP 时长（秒）。
+        vip_after: 领取后 VIP 时长（秒）。
+        error: 错误信息。
+        source: 来源，默认 "gui"。
+    """
+    event_at = time.time()
+    week_start = get_week_start_ts(event_at)
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            """INSERT INTO claim_events
+               (run_id, account_id, phone, event_at, week_start, source,
+                status, step, detail, current, total,
+                vip_before, vip_after, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, account_id, phone, event_at, week_start, source,
+             status, step, detail, current, total,
+             vip_before, vip_after, error),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_claim_events(
+    week_start: float | None = None,
+    limit: int = 200,
+    db_path: str | None = None,
+) -> list[dict]:
+    """查询领取过程事件。
+
+    Args:
+        week_start: 按周筛选，None 为不限制。
+        limit: 最大返回条数。
+    """
+    conn = get_connection(db_path)
+    try:
+        if week_start is not None:
             rows = conn.execute(
-                """SELECT ch.*, a.phone
-                   FROM claim_history ch
-                   JOIN accounts a ON ch.account_id = a.id
-                   WHERE ch.account_id = ?
-                   ORDER BY ch.claimed_at DESC
+                """SELECT * FROM claim_events
+                   WHERE week_start = ?
+                   ORDER BY event_at DESC
                    LIMIT ?""",
-                (account_id, limit),
+                (week_start, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT ch.*, a.phone
-                   FROM claim_history ch
-                   JOIN accounts a ON ch.account_id = a.id
-                   ORDER BY ch.claimed_at DESC
+                """SELECT * FROM claim_events
+                   ORDER BY event_at DESC
                    LIMIT ?""",
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def cleanup_old_claim_events(keep_weeks: int = 8, db_path: str | None = None) -> None:
+    """清理超过 keep_weeks 周的旧事件日志。
+
+    Args:
+        keep_weeks: 保留最近几周的数据，默认 8 周。
+    """
+    cutoff = get_week_start_ts() - (keep_weeks * 7 * 86400)
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM claim_events WHERE week_start < ?",
+            (cutoff,),
+        )
+        conn.commit()
     finally:
         conn.close()

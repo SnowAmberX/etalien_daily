@@ -80,8 +80,28 @@ main {
   display: flex; flex-direction: column; gap: 10px;
 }
 
-/* ── Stats bar ───────────────────────────────────── */
-#stats-bar { display: flex; align-items: center; gap: 8px; padding-bottom: 4px; }
+/* ── Stats bar grid ──────────────────────────────── */
+#stats-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding-bottom: 8px; }
+.stat-card {
+  position: relative; overflow: hidden; z-index: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 18px; text-align: center;
+  transition: border-color 0.25s, background 0.25s;
+}
+.stat-card::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: radial-gradient(ellipse 60% 60% at 50% 50%, var(--amber-glow), transparent 70%);
+  opacity: 0; transition: opacity 0.4s; pointer-events: none;
+}
+.stat-card:hover { border-color: var(--border-hover); }
+.stat-card:hover::before { opacity: 1; }
+.stat-value {
+  font-size: 26px; font-weight: 600; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.stat-label {
+  font-size: 12px; color: var(--muted); margin-top: 2px; letter-spacing: 0.05em;
+}
 .stat-sep { color: var(--muted); }
 
 /* ── Action bar ──────────────────────────────────── */
@@ -131,6 +151,33 @@ main {
 .acct-status.ok { color: var(--sage); background: var(--sage-dim); }
 .acct-status.waiting { color: var(--amber); background: var(--amber-dim); }
 .acct-status.error { color: var(--ember); background: var(--ember-dim); }
+
+/* ── Account card VIP ────────────────────────────── */
+.acct-vip {
+  font-size: 12px; color: var(--amber); margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Account card progress bar ───────────────────── */
+.account-progress-wrap {
+  position: relative; margin-top: 6px; height: 4px;
+  background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden;
+}
+.account-progress-fill {
+  height: 100%; background: var(--amber); border-radius: 2px;
+  transition: width 0.6s ease; width: 0%; position: relative;
+}
+.account-progress-fill::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 20px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+@keyframes shimmer { 0% { left: -20px; } 100% { left: 100%; } }
+.account-progress-fill.complete { background: var(--sage); }
+.account-progress-label {
+  font-size: 10px; color: var(--muted); margin-top: 2px;
+  text-align: right; font-variant-numeric: tabular-nums;
+}
 
 /* ── Action menu (three-dot) ─────────────────────── */
 .acct-menu-wrap { position: absolute; top: 4px; right: 24px; z-index: 2; }

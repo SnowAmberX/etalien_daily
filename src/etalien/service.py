@@ -77,13 +77,15 @@ def claim_for_account(
     account: Account,
     settings: dict[str, Any] | None = None,
     progress_callback: Callable | None = None,
+    source: str = "service",
 ) -> dict[str, Any]:
     """对单个账号执行完整领取流程。
 
     Args:
         account: 账号对象（含 token 和 device_id）。
         settings: 设置 dict，为 None 时自动加载。
-        progress_callback: 进度回调，签名为 callback(phone, step, detail)。
+        progress_callback: 进度回调，签名为 callback(phone, step, detail, **extra)。
+        source: 来源标识（"service" 或 "gui"），影响数据库记录的 source 字段。
 
     Returns:
         {
@@ -143,12 +145,18 @@ def claim_for_account(
         base_result["error_msg"] = f"获取任务列表失败: {config.get('msg')}"
         return base_result
 
+    # 上报初始广告进度
+    watched, total = get_ad_progress_from_config(config)
+    _report(progress_callback, phone, "config", f"获取广告任务 ({watched}/{total})",
+            current=watched, total=total)
+
     # 检查是否全部已完成
     if _all_ads_watched(config):
-        _report(progress_callback, phone, "done", "所有广告已观看完毕")
+        _report(progress_callback, phone, "done", "所有广告已观看完毕",
+                current=total, total=total, vip_before=vip_before, vip_after=vip_before)
         base_result["status"] = STATUS_ALREADY_DONE
         base_result["vip_after"] = vip_before
-        _save_claim_record(account.id, base_result)
+        _save_claim_record(account.id, base_result, source=source)
         return base_result
 
     # 4. 对每种 business 逐一领取
@@ -184,7 +192,7 @@ def claim_for_account(
         if _is_auth_error(after):
             base_result["status"] = STATUS_AUTH_ERROR
             base_result["error_msg"] = "领取后 token 过期"
-            _save_claim_record(account.id, base_result)
+            _save_claim_record(account.id, base_result, source=source)
             return base_result
 
     vip_after = int(after.get("vip_duration_second", vip_before))
@@ -197,7 +205,12 @@ def claim_for_account(
     else:
         base_result["status"] = STATUS_OK
 
-    _save_claim_record(account.id, base_result)
+    # 最终进度上报
+    _report(progress_callback, phone, "done", "领取完成",
+            current=total, total=total,
+            vip_before=vip_before, vip_after=vip_after)
+
+    _save_claim_record(account.id, base_result, source=source)
     return base_result
 
 
@@ -323,6 +336,7 @@ def run_concurrent_claim(
     accounts: list[Account],
     settings: dict[str, Any] | None = None,
     progress_callback: Callable | None = None,
+    source: str = "service",
 ) -> list[dict[str, Any]]:
     """并发领取多个账号。
 
@@ -330,6 +344,7 @@ def run_concurrent_claim(
         accounts: 已启用的账号列表。
         settings: 设置 dict。
         progress_callback: 进度回调。
+        source: 来源标识（"service" 或 "gui"），传递给 claim_for_account。
 
     Returns:
         结果列表（完成顺序，非提交顺序）。
@@ -342,7 +357,7 @@ def run_concurrent_claim(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_account = {
-            executor.submit(claim_for_account, acc, settings, progress_callback): acc
+            executor.submit(claim_for_account, acc, settings, progress_callback, source): acc
             for acc in accounts
         }
         for future in as_completed(future_to_account):
@@ -367,10 +382,17 @@ def run_concurrent_claim(
 
 # ── 辅助函数 ──────────────────────────────────────────────────────
 
-def _report(callback: Callable | None, phone: str, step: str, detail: str) -> None:
-    """调用进度回调（如果提供）。"""
+def _report(callback: Callable | None, phone: str, step: str, detail: str, **extra) -> None:
+    """调用进度回调（如果提供）。
+
+    支持通过 **extra 传递额外的进度信息（current, total, vip_before 等），
+    向下兼容仅接受 (phone, step, detail) 的回调函数。
+    """
     if callback:
         try:
+            callback(phone, step, detail, **extra)
+        except TypeError:
+            # 旧回调不接受 **extra，降级调用
             callback(phone, step, detail)
         except Exception as e:
             logger.warning("进度回调异常: %s", e)
@@ -399,6 +421,22 @@ def get_unwatched_count(tasks: list) -> int:
     )
 
 
+def get_ad_progress_from_config(config: dict) -> tuple[int, int]:
+    """从广告任务配置中提取 (已观看数, 总数)。
+
+    兼容 etalien-auto (level["items"]) 和 etalien-daily (level["list"]) 两种字段名，
+    基于每条 item 的 is_watch 字段统计。
+    """
+    tasks = config.get("list", [])
+    total = 0
+    watched = 0
+    for level in tasks:
+        items = _get_level_items(level)
+        total += len(items)
+        watched += sum(1 for item in items if bool(item.get("is_watch", False)))
+    return watched, total
+
+
 def _is_auth_error(result: dict) -> bool:
     """判断响应是否为认证错误。"""
     if not result.get("_error"):
@@ -411,9 +449,14 @@ def _all_ads_watched(config: dict) -> bool:
     return get_unwatched_count(config.get("list", [])) == 0
 
 
-def _save_claim_record(account_id: int, result: dict) -> None:
+def _save_claim_record(account_id: int, result: dict, source: str = "service") -> None:
     """保存领取记录到数据库。"""
     try:
+        detail = result.get("error_msg", "")
+        if result["status"] == STATUS_OK:
+            detail = f"成功{result.get('claimed', 0)}次,失败{result.get('failed', 0)}次"
+        elif result["status"] == STATUS_ALREADY_DONE:
+            detail = "所有广告已观看完毕"
         add_claim_record(
             account_id=account_id,
             status=result["status"],
@@ -421,6 +464,8 @@ def _save_claim_record(account_id: int, result: dict) -> None:
             vip_after=result.get("vip_after", 0),
             claimed_count=result.get("claimed", 0),
             failed_count=result.get("failed", 0),
+            source=source,
+            detail=detail,
         )
     except Exception as e:
         logger.warning("保存领取记录失败: %s", e)
