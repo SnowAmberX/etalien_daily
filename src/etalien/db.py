@@ -97,6 +97,7 @@ def init_db(db_path: str | None = None) -> None:
         _ensure_column(conn, "claim_history", "detail TEXT DEFAULT ''")
         # 幂等迁移：为旧 accounts 表补充 password 列
         _ensure_column(conn, "accounts", "password TEXT DEFAULT ''")
+        _ensure_column(conn, "accounts", "last_mobile_claim REAL DEFAULT 0")
         # 回填旧数据的 week_start（粗略用当前周）
         conn.execute(
             "UPDATE claim_history SET week_start = ? WHERE week_start IS NULL OR week_start = 0",
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     user_id    INTEGER DEFAULT 0,
     device_id  TEXT NOT NULL,
     password   TEXT DEFAULT '',
+    last_mobile_claim REAL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -197,6 +199,7 @@ class Account:
     user_id: int = 0
     device_id: str = ""
     password: str = ""
+    last_mobile_claim: float = 0.0
     id: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
@@ -229,6 +232,7 @@ def _account_from_row(row: sqlite3.Row) -> Account:
         user_id=row["user_id"],
         device_id=row["device_id"],
         password=row["password"] if "password" in row.keys() else "",
+        last_mobile_claim=row["last_mobile_claim"] if "last_mobile_claim" in row.keys() else 0.0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -321,7 +325,7 @@ def update_account(phone: str, db_path: str | None = None, **fields) -> bool:
     支持的字段: name, remark, enabled, auth_token, user_id, device_id
     自动更新 updated_at。
     """
-    allowed = {"name", "remark", "enabled", "auth_token", "user_id", "device_id", "password"}
+    allowed = {"name", "remark", "enabled", "auth_token", "user_id", "device_id", "password", "last_mobile_claim"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return False

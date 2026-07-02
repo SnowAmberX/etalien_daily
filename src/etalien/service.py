@@ -222,14 +222,22 @@ def claim_for_account(
 
     # ── 手机端领取 ──
     if target != "pc":
-        _report(progress_callback, phone, "mobile", "开始手机端领取")
-        mobile_claimed, mobile_failed = _claim_mobile_phase(
-            client, settings, phone, progress_callback,
-        )
-        total_claimed += mobile_claimed
-        total_failed += mobile_failed
-        base_result["claimed"] = total_claimed
-        base_result["failed"] = total_failed
+        # 每 3 天执行一次
+        now = time.time()
+        if account.last_mobile_claim > 0 and (now - account.last_mobile_claim) < 259200:
+            logger.info("[%s] 距上次手机领取不足3天，跳过", phone)
+            _report(progress_callback, phone, "mobile_skip", "手机端距上次不足3天，跳过")
+        else:
+            _report(progress_callback, phone, "mobile", "开始手机端领取")
+            mobile_claimed, mobile_failed = _claim_mobile_phase(
+                client, settings, phone, progress_callback,
+            )
+            total_claimed += mobile_claimed
+            total_failed += mobile_failed
+            base_result["claimed"] = total_claimed
+            base_result["failed"] = total_failed
+            # 记录手机领取时间
+            update_account(phone, last_mobile_claim=now)
 
     # 判断最终状态
     if total_failed > 0 and total_claimed == 0:

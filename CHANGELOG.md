@@ -5,6 +5,11 @@ All notable changes to etalien-daily will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-07-22
+
+### Changed
+- 手机端领取改为每 3 天执行一次（`last_mobile_claim` 时间戳记录）
+
 ## [1.2.0]
 
 ### Added
