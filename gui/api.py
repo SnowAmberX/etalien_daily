@@ -70,7 +70,7 @@ def _get_client(phone: str) -> ApiClient:
 
 _ACCOUNT_PUBLIC_FIELDS = {
     "id", "phone", "name", "remark", "enabled",
-    "user_id", "device_id", "created_at", "updated_at",
+    "user_id", "device_id", "created_at", "updated_at", "has_password",
 }
 
 
@@ -207,6 +207,45 @@ def create_app() -> Flask:
 
         return jsonify({"ok": True, "user_id": user_id})
 
+    @app.route("/api/login/<phone>/password", methods=["POST"])
+    def password_login(phone):
+        data = request.get_json(silent=True) or {}
+        password = data.get("password", "").strip()
+        if not password:
+            return jsonify({"error": "密码不能为空"}), 400
+
+        acc = get_account(phone)
+        if not acc:
+            return jsonify({"error": "账号不存在"}), 404
+
+        client = _get_client(phone)
+        result = client.login_by_password(
+            phone_number=_normalize_phone(phone),
+            password=password,
+        )
+        if result.get("_error"):
+            return jsonify({"error": result.get("msg", "登录失败")}), 401
+
+        token = result.get("authorization", "")
+        user_id = result.get("user_id", 0)
+        update_account_token(phone, token, user_id)
+        # 保存密码到数据库
+        update_account(phone, password=password)
+        _pending_clients.pop(phone, None)
+
+        # 获取用户昵称
+        try:
+            profile = client.fetch_my_profile()
+            nickname = profile.get("nickname", "")
+            if nickname:
+                acc2 = get_account(phone)
+                if acc2 and not acc2.name:
+                    update_account(phone, name=nickname)
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "user_id": user_id})
+
     # ── 状态 ────────────────────────────────────────────────
 
     @app.route("/api/status", methods=["GET"])
@@ -279,6 +318,26 @@ def create_app() -> Flask:
             progress_str = f"{watched}/{total}"
             status = "all_done" if total > 0 and watched >= total else "ok"
 
+            # 手机端数据（静默获取，失败不影响 PC 端显示）
+            mobile_current = 0
+            mobile_total = 0
+            mobile_progress = "-/-"
+            mobile_duration = 0
+            try:
+                activity = client.fetch_mobile_ad_activity()
+                if not activity.get("_error"):
+                    video_bar = activity.get("video_bar", [])
+                    # 待领取 = has_award=true 且 is_get=false
+                    pending = [t for t in video_bar if t.get("has_award") and not t.get("is_get")]
+                    mobile_total = len([t for t in video_bar if t.get("has_award")])
+                    mobile_current = mobile_total - len(pending)
+                    mobile_progress = f"{mobile_current}/{mobile_total}" if mobile_total > 0 else "-/-"
+                profile = client.fetch_my_profile()
+                if not profile.get("_error"):
+                    mobile_duration = int(profile.get("mobile_not_get_ad_duration", 0))
+            except Exception:
+                pass
+
             return {
                 **base,
                 "logged_in": True,
@@ -290,6 +349,10 @@ def create_app() -> Flask:
                 "progress": progress_str,
                 "current": watched,
                 "total": total,
+                "mobile_progress": mobile_progress,
+                "mobile_current": mobile_current,
+                "mobile_total": mobile_total,
+                "mobile_duration": mobile_duration,
             }
 
         with ThreadPoolExecutor(max_workers=min(len(accounts), 10)) as executor:
@@ -324,6 +387,11 @@ def create_app() -> Flask:
 
     @app.route("/api/claim", methods=["POST"])
     def start_claim():
+        data = request.get_json(silent=True) or {}
+        target = data.get("target", "all")
+        if target not in ("all", "pc", "mobile"):
+            target = "all"
+
         run_id = claim_manager.start()
         if not run_id:
             return jsonify({"error": "领取任务已在运行中"}), 409
@@ -403,6 +471,7 @@ def create_app() -> Flask:
                     accounts, settings,
                     progress_callback=_progress_callback,
                     source="gui",
+                    target=target,
                 )
                 # 用最终结果更新进度
                 for r in results:
@@ -436,7 +505,7 @@ def create_app() -> Flask:
     @app.route("/api/settings", methods=["PUT"])
     def settings_update():
         data = request.get_json(silent=True) or {}
-        allowed = {"max_concurrent", "request_interval", "max_rounds", "schedule_time",
+        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "schedule_time",
                    "schedule_enabled", "schedule_method"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:

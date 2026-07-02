@@ -10,11 +10,18 @@ from .account_pb2 import (
     LoginByOneClickResponse,
     LoginRequest,
     LoginResponse,
+    LoginV2Request,
+    LoginV2Response,
+    Member,
     MyProfileResponse,
     RefreshTokenRequest,
     RefreshTokenResponse,
+    UserVideoAward,
 )
 from .apiv2_pb2 import (
+    AdActivityItem,
+    AdActivityRequest,
+    AdActivityResponse,
     GetUserRemainDurationRequest,
     GetUserRemainDurationResponse,
     MobilePcProductItem,
@@ -34,6 +41,7 @@ from .error_pb2 import Error
 # 响应类型注册表
 _RESPONSE_TYPES: dict[str, type] = {
     "/account/v1/login": LoginResponse,
+    "/v2/account/login": LoginV2Response,
     "/v2/account/pc/ad/config": PcAdConfigResponse,
     "/v2/account/pc/ad/callback/backup": PcAdCallbackBackupResponse,
     "/v2/account/remain/duration": GetUserRemainDurationResponse,

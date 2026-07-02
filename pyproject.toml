@@ -1,6 +1,6 @@
 [project]
 name = "etalien-daily"
-version = "1.0.0"
+version = "1.2.0"
 description = "ET免广告领取加速时长"
 requires-python = ">=3.11"
 dependencies = [

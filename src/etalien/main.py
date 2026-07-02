@@ -14,8 +14,10 @@
 
 import argparse
 import logging
+import os
 import sys
 import time
+from logging.handlers import TimedRotatingFileHandler
 from typing import Any
 
 from etalien import __version__
@@ -50,16 +52,37 @@ EXIT_PARTIAL = 1
 EXIT_ALL_FAIL = 2
 EXIT_NEED_LOGIN = 3
 EXIT_NO_ENABLED = 4
+EXIT_NETWORK_ERROR = 5
 
 
 # ── 日志 ──────────────────────────────────────────────────────────
 
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.WARNING
+    handlers = [
+        logging.StreamHandler(),
+    ]
+    # 文件日志（按天轮转，保留 7 天）
+    try:
+        from etalien.db import get_db_path
+        config_dir = os.path.dirname(get_db_path())
+        log_path = os.path.join(config_dir, "etalien.log")
+        handlers.append(
+            TimedRotatingFileHandler(
+                log_path,
+                when="midnight",
+                backupCount=7,
+                encoding="utf-8",
+            )
+        )
+    except Exception:
+        pass  # 文件日志创建失败不影响主流程
+
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(message)s",
         level=level,
         datefmt="%H:%M:%S",
+        handlers=handlers,
     )
 
 
@@ -118,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_login = acc_sub.add_parser("login", help="登录获取 token")
     p_login.add_argument("phone", help="手机号")
     p_login.add_argument("--code", "-c", default=None, help="验证码（不指定则先发送验证码）")
+    p_login.add_argument("--password", "-p", default=None, help="密码登录（与 --code 互斥）")
 
     # ── account remove ──
     p_rm = acc_sub.add_parser("remove", help="删除账号")
@@ -307,7 +331,24 @@ def _cmd_account_login(args: argparse.Namespace) -> None:
     api_phone = _normalize_phone(phone)
     client = ApiClient(device_id=acc.device_id)
 
-    if args.code:
+    if args.password:
+        # 密码登录
+        print(f"正在用密码登录 {phone} ...")
+        result = client.login_by_password(phone_number=api_phone, password=args.password)
+        if result.get("_error"):
+            print(f"登录失败: {result.get('msg')} (code={result.get('code')})")
+            sys.exit(1)
+
+        token = result.get("authorization", "")
+        user_id = result.get("user_id", 0)
+        update_account_token(phone, token, user_id)
+        # 保存密码到数据库
+        update_account(phone, password=args.password)
+        print(f"登录成功!")
+        print(f"  user_id: {user_id}")
+        print(f"  token: {token[:20]}...")
+        _fetch_and_set_nickname(client, phone)
+    elif args.code:
         # 已有验证码，直接登录
         print(f"正在登录 {phone} ...")
         result = client.login(phone_number=api_phone, verification_code=args.code)
@@ -522,7 +563,13 @@ def _determine_exit_code(results: list[dict]) -> int:
     fail_count = sum(1 for s in statuses if s in (STATUS_AUTH_ERROR, STATUS_ERROR))
 
     if has_login: return EXIT_NEED_LOGIN
-    if fail_count == len(results): return EXIT_ALL_FAIL
+    # 全部失败时检查是否为网络错误
+    if fail_count == len(results):
+        for r in results:
+            msg = (r.get("error_msg") or "").lower()
+            if any(kw in msg for kw in ("connection", "timeout", "network", "max retries")):
+                return EXIT_NETWORK_ERROR
+        return EXIT_ALL_FAIL
     if ok_count > 0 and fail_count > 0: return EXIT_PARTIAL
     return EXIT_ALL_OK
 

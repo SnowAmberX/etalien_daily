@@ -25,8 +25,8 @@
       <span class="titlebar-text">免广告领时长</span>
     </div>
     <div class="titlebar-controls">
-      <button class="tb-btn" onclick="showSettings()" title="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.3v1.2M8 13.5v1.2M3.2 3.2l.8.8M12 12l.8.8M1.3 8h1.2M13.5 8h1.2M3.2 12.8l.8-.8M12 4l.8-.8"/></svg></button>
-      <button class="tb-btn" onclick="showHistory()" title="历史"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.5v3.5l2.5 1.5"/></svg></button>
+      <button class="tb-btn tb-btn-lg" onclick="showSettings()" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.4"/><path d="M12 4.2v1.3M12 18.5v1.3M4.2 12h1.3M18.5 12h1.3M6.2 6.2l.9.9M16.9 16.9l.9.9M6.2 17.8l.9-.9M16.9 7.1l.9-.9"/><circle cx="12" cy="12" r="6.2"/></svg></button>
+      <button class="tb-btn tb-btn-lg" onclick="showHistory()" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.1v4.7l3 2"/><path d="M7.2 3.8H4.8v2.4"/></svg></button>
       <button class="tb-btn tb-close" onclick="windowMinimize()" title="最小化"><svg viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       <button class="tb-btn tb-max" onclick="windowMaximize()" title="最大化"><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="0" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
       <button class="tb-btn tb-close-btn" onclick="windowClose()" title="关闭"><svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
@@ -53,9 +53,11 @@
 
     <!-- 操作栏 -->
     <div class="action-bar">
-      <button id="btn-claim-start" class="btn-primary claim-action-btn" onclick="startClaim()">开始领取</button>
-      <button class="btn-secondary" onclick="refreshStatus()">刷新状态</button>
+      <button id="btn-claim-start" class="btn-primary claim-action-btn" onclick="startClaim('all')">全部领取</button>
+      <button class="btn-secondary claim-action-btn" onclick="startClaim('pc')">仅 PC</button>
+      <button class="btn-secondary claim-action-btn" onclick="startClaim('mobile')">仅手机</button>
       <span class="spacer"></span>
+      <button class="btn-secondary" onclick="refreshStatus()">刷新状态</button>
       <button class="btn-small btn-primary" onclick="showAddDialog()">+ 添加账号</button>
     </div>
 
@@ -92,11 +94,25 @@
 <div id="dlg-login" class="modal-overlay hidden">
   <div class="modal-content">
     <h3>登录 <span id="dlg-login-phone"></span></h3>
-    <div id="dlg-login-send"><button class="btn-primary" onclick="sendLoginCode()">发送验证码</button><button class="btn-secondary" style="margin-left:8px" onclick="closeModal('dlg-login')">取消</button></div>
+    <div class="login-tabs">
+      <button class="login-tab active" onclick="switchLoginTab('sms')">短信登录</button>
+      <button class="login-tab" onclick="switchLoginTab('password')">密码登录</button>
+    </div>
+    <div id="dlg-login-send">
+      <button class="btn-primary" onclick="sendLoginCode()">发送验证码</button>
+      <button class="btn-secondary" style="margin-left:8px" onclick="closeModal('dlg-login')">取消</button>
+    </div>
     <div id="dlg-login-verify" class="hidden">
       <label>验证码 <input id="dlg-login-code" type="text" placeholder="输入短信验证码" maxlength="6"></label>
       <div class="dlg-buttons">
         <button class="btn-primary" onclick="verifyLoginCode()">登录</button>
+        <button class="btn-secondary" onclick="closeModal('dlg-login')">取消</button>
+      </div>
+    </div>
+    <div id="dlg-login-password" class="hidden">
+      <label>密码 <input id="dlg-login-pwd" type="password" placeholder="输入密码"></label>
+      <div class="dlg-buttons">
+        <button class="btn-primary" onclick="passwordLogin()">登录</button>
         <button class="btn-secondary" onclick="closeModal('dlg-login')">取消</button>
       </div>
     </div>

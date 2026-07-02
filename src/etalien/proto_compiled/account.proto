@@ -26,6 +26,18 @@ message LoginResponse {
     string authorization = 2;
 }
 
+// 密码登录请求
+// POST /v2/account/login
+message LoginV2Request {
+    string phone_number = 1;
+    string password = 2;
+}
+
+message LoginV2Response {
+    int64 user_id = 1;
+    string authorization = 2;
+}
+
 // 一键登录请求
 // POST /account/v1/login/by-one-click
 message LoginByOneClickRequest {
@@ -42,10 +54,25 @@ message LoginByOneClickResponse {
 message MyProfileResponse {
     int64 user_id = 1;
     string nickname = 2;
-    string avatar_url = 3;
-    int64 gender = 5;
-    string bio = 7;
-    int64 level = 9;
+    string avatar = 3;
+    string steamid = 4;
+    int64 register_time = 5;
+    repeated Member members = 6;
+    Member member = 7;
+    UserVideoAward video_award = 8;
+    int64 mobile_not_get_ad_duration = 9;
+}
+
+// 会员信息
+message Member {
+    int64 type = 1;
+    int64 expire_time = 2;
+}
+
+// 视频奖励信息
+message UserVideoAward {
+    int64 award = 1;
+    bool has = 2;
 }
 
 // 刷新token

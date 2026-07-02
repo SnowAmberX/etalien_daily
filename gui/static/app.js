@@ -103,6 +103,7 @@ function closeModal(id) {
 // Click overlay to close
 document.addEventListener('click', (e) => {
   if (e.target.classList.contains('modal-overlay') && !e.target.classList.contains('hidden')) {
+    if (e.target.id === 'dlg-settings') return;  // 设置弹窗不允许点外部关闭
     closeModal(e.target.id);
   }
 });
@@ -170,7 +171,14 @@ function renderAccountCards(accounts) {
   strip.innerHTML = accounts.map(acc => {
     const progressPct = acc.token_valid && acc.total > 0 ? Math.min(100, Math.round((acc.current || 0) / acc.total * 100)) : 0;
     const progressStr = acc.token_valid ? `${acc.current || 0}/${acc.total || 0}` : '-/-';
-    const vipStr = acc.token_valid ? 'VIP: ' + fmtDuration(acc.vip_duration || 0) : '';
+    const mobilePct = acc.token_valid && acc.mobile_total > 0 ? Math.min(100, Math.round((acc.mobile_current || 0) / acc.mobile_total * 100)) : 0;
+    const mobileProgressStr = acc.mobile_current !== undefined ? `${acc.mobile_current || 0}/${acc.mobile_total || 0}` : '-/-';
+    var vipParts = [];
+    if (acc.token_valid) {
+      vipParts.push('VIP: ' + fmtDuration(acc.vip_duration || 0));
+      if (acc.mobile_duration > 0) vipParts.push('手机: ' + fmtDuration(acc.mobile_duration));
+    }
+    const vipStr = vipParts.length ? vipParts.join(' · ') : '';
     const needsLogin = !acc.logged_in || !acc.token_valid;
     const statusClass = acc.status === 'ok' || acc.status === 'all_done' ? 'ok'
       : acc.status === 'error' ? 'error'
@@ -193,7 +201,12 @@ function renderAccountCards(accounts) {
       <div class="account-progress-wrap">
         <div class="account-progress-fill" style="width:${progressPct}%"></div>
       </div>
-      <div class="account-progress-label">${progressStr}</div>
+      <div class="account-progress-label">PC ${progressStr}</div>
+      ${acc.mobile_current !== undefined ? `
+      <div class="account-progress-wrap">
+        <div class="account-progress-fill" style="width:${mobilePct}%"></div>
+      </div>
+      <div class="account-progress-label">手机 ${mobileProgressStr}</div>` : ''}
       <span class="acct-status ${statusClass}">${statusLabel(acc.status)}</span>
     </div>`;
   }).join('');
@@ -292,8 +305,26 @@ function startLogin(phone) {
   document.getElementById('dlg-login-phone').textContent = phone;
   document.getElementById('dlg-login-send').classList.remove('hidden');
   document.getElementById('dlg-login-verify').classList.add('hidden');
+  document.getElementById('dlg-login-password').classList.add('hidden');
   document.getElementById('dlg-login-msg').textContent = '';
+  switchLoginTab('sms');
   showModal('dlg-login');
+}
+function switchLoginTab(tab) {
+  document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+  if (tab === 'sms') {
+    document.querySelector('.login-tab:first-child').classList.add('active');
+    document.getElementById('dlg-login-send').classList.remove('hidden');
+    document.getElementById('dlg-login-verify').classList.add('hidden');
+    document.getElementById('dlg-login-password').classList.add('hidden');
+  } else {
+    document.querySelector('.login-tab:last-child').classList.add('active');
+    document.getElementById('dlg-login-send').classList.add('hidden');
+    document.getElementById('dlg-login-verify').classList.add('hidden');
+    document.getElementById('dlg-login-password').classList.remove('hidden');
+    document.getElementById('dlg-login-pwd').focus();
+  }
+  document.getElementById('dlg-login-msg').textContent = '';
 }
 async function sendLoginCode() {
   try {
@@ -315,9 +346,21 @@ async function verifyLoginCode() {
     loadAccounts();
   } catch (e) { document.getElementById('dlg-login-msg').textContent = '登录失败: ' + e.message; }
 }
+async function passwordLogin() {
+  const pwd = document.getElementById('dlg-login-pwd').value;
+  if (!pwd) return;
+  try {
+    await api('/api/login/' + _loginPhone + '/password', { method: 'POST', body: { password: pwd } });
+    toast('登录成功', 'success');
+    closeModal('dlg-login');
+    document.getElementById('dlg-login-pwd').value = '';
+    loadAccounts();
+  } catch (e) { document.getElementById('dlg-login-msg').textContent = '登录失败: ' + e.message; }
+}
 
 // ── Claim ───────────────────────────────────────────────────
 let _claimTimer = null;
+let _claimTarget = '全部领取';
 
 function addLog(phone, msg, cls) {
   const entries = document.getElementById('log-entries');
@@ -330,7 +373,9 @@ function addLog(phone, msg, cls) {
   entries.scrollTop = entries.scrollHeight;
 }
 
-async function startClaim() {
+async function startClaim(target = 'all') {
+  const labels = { all: '全部领取', pc: '仅 PC', mobile: '仅手机' };
+  _claimTarget = labels[target];
   const btn = document.getElementById('btn-claim-start');
   btn.disabled = true; btn.textContent = '启动中...';
   document.getElementById('claim-results').classList.add('hidden');
@@ -338,11 +383,11 @@ async function startClaim() {
   showModal('dlg-log');
 
   try {
-    const data = await api('/api/claim', { method: 'POST' });
-    btn.textContent = '领取中...';
+    const data = await api('/api/claim', { method: 'POST', body: { target } });
+    btn.textContent = labels[target] + '中...';
     _claimTimer = setInterval(pollClaimProgress, 1000);
   } catch (e) {
-    btn.disabled = false; btn.textContent = '开始领取';
+    btn.disabled = false; btn.textContent = labels[target];
     toast(e.message, 'error');
   }
 }
@@ -376,7 +421,7 @@ async function pollClaimProgress() {
     if (!data.running) {
       clearInterval(_claimTimer); _claimTimer = null;
       document.getElementById('btn-claim-start').disabled = false;
-      document.getElementById('btn-claim-start').textContent = '开始领取';
+      document.getElementById('btn-claim-start').textContent = _claimTarget || '全部领取';
       if (entries.length) renderClaimResults(entries);
       // Reload real status after claim completes
       await loadAccounts();
@@ -639,6 +684,59 @@ function animateValue(id, target) {
   requestAnimationFrame(step);
 }
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+// ── Draggable toggle ────────────────────────────────────────
+let _tgSlider = null, _tgInput = null, _tgStartX = 0, _tgChecked = false;
+
+function _tgOnDown(e) {
+  const wrap = e.target.closest('.toggle-switch');
+  if (!wrap) return;
+  const slider = wrap.querySelector('.toggle-slider');
+  const input = wrap.querySelector('input[type="checkbox"]');
+  if (!slider || !input) return;
+
+  _tgSlider = slider;
+  _tgInput = input;
+  _tgChecked = input.checked;
+  _tgStartX = e.clientX;
+
+  slider.classList.add('dragging');
+  document.addEventListener('mousemove', _tgOnMove);
+  document.addEventListener('mouseup', _tgOnUp);
+  e.preventDefault();
+}
+
+function _tgOnMove(e) {
+  if (!_tgSlider) return;
+  const dx = e.clientX - _tgStartX;
+  const clamped = Math.max(0, Math.min(20, _tgChecked ? 20 + dx : dx));
+  _tgSlider.style.setProperty('--thumb-x', clamped + 'px');
+}
+
+function _tgOnUp(e) {
+  if (!_tgSlider || !_tgInput) return;
+  const dx = e.clientX - _tgStartX;
+  const shouldCheck = dx > 10 ? true : dx < -10 ? false : !_tgChecked;
+
+  _tgSlider.classList.remove('dragging');
+  _tgSlider.style.removeProperty('--thumb-x');
+  document.removeEventListener('mousemove', _tgOnMove);
+  document.removeEventListener('mouseup', _tgOnUp);
+
+  if (_tgInput.checked !== shouldCheck) {
+    _tgInput.checked = shouldCheck;
+    _tgInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  _tgSlider = null;
+  _tgInput = null;
+}
+
+document.addEventListener('mousedown', _tgOnDown);
+// 阻止原生 click 切换，由 _tgOnUp 统一处理
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.toggle-switch')) e.preventDefault();
+});
 
 // ── Init ───────────────────────────────────────────────────
 loadAccounts();

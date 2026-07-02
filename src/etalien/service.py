@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ──────────────────────────────────────────────────────────
 
-AD_ID = "103334281"            # 固定广告 ID
+AD_ID = "103334281"            # 固定广告 ID（PC）
 BUSINESS_TYPES = [1, 2, 3]     # 三种广告业务类型
 MAX_STALLED_ROUNDS = 3         # 连续无进展最大轮数（防死循环）
 BUSINESS_SLEEP = 3.0           # 业务类型切换间隔（秒）
+
+# 手机端常量
+MOBILE_AD_ID = "102815305"     # 手机端广告 ID
+MOBILE_BUSINESS = 2            # 手机端业务类型
 
 
 # ── 结果状态 ──────────────────────────────────────────────────────
@@ -46,7 +50,7 @@ def init_client(account: Account) -> ApiClient | None:
 
     - 如果账号有 token，验证其有效性
     - 如果 token 有效，返回带 token 的 client
-    - 如果 token 过期，返回不带 token 的 client（调用方需先登录）
+    - 如果 token 过期或无 token，尝试用已存密码自动登录
 
     Returns:
         ApiClient 实例，异常时返回 None。
@@ -64,9 +68,21 @@ def init_client(account: Account) -> ApiClient | None:
     if account.auth_token:
         if client.check_token_valid():
             logger.debug("Token 有效: %s", account.phone)
+            return client
         else:
             logger.info("Token 已过期: %s", account.phone)
             client.clear_auth_token()
+
+    # Token 无效或无 token，尝试密码自动登录
+    if account.password:
+        logger.info("尝试密码自动登录: %s", account.phone)
+        result = client.login_by_password(account.phone, account.password)
+        if result.get("_error"):
+            logger.warning("密码自动登录失败 (%s): %s", account.phone, result.get("msg"))
+        else:
+            logger.info("密码自动登录成功 (%s), user_id=%s", account.phone, result.get("user_id"))
+            update_account_token(account.phone, result["authorization"], result["user_id"])
+            return client
 
     return client
 
@@ -78,6 +94,7 @@ def claim_for_account(
     settings: dict[str, Any] | None = None,
     progress_callback: Callable | None = None,
     source: str = "service",
+    target: str = "all",
 ) -> dict[str, Any]:
     """对单个账号执行完整领取流程。
 
@@ -86,6 +103,7 @@ def claim_for_account(
         settings: 设置 dict，为 None 时自动加载。
         progress_callback: 进度回调，签名为 callback(phone, step, detail, **extra)。
         source: 来源标识（"service" 或 "gui"），影响数据库记录的 source 字段。
+        target: 领取目标（"all" / "pc" / "mobile"）。
 
     Returns:
         {
@@ -125,78 +143,93 @@ def claim_for_account(
         base_result["error_msg"] = "未登录或 token 已过期"
         return base_result
 
-    # 2. 查询领取前 VIP 时长
-    _report(progress_callback, phone, "before", "查询当前时长")
-    before = client.fetch_pc_duration()
-    if before.get("_error"):
-        if _is_auth_error(before):
-            base_result["status"] = STATUS_AUTH_ERROR
-            base_result["error_msg"] = "token 已过期"
-            return base_result
-        base_result["error_msg"] = f"查询时长失败: {before.get('msg')}"
-        return base_result
-    vip_before = int(before.get("vip_duration_second", 0))
-    base_result["vip_before"] = vip_before
-
-    # 3. 获取广告任务列表
-    _report(progress_callback, phone, "config", "获取广告任务")
-    config = client.fetch_pc_ad_config()
-    if config.get("_error"):
-        base_result["error_msg"] = f"获取任务列表失败: {config.get('msg')}"
-        return base_result
-
-    # 上报初始广告进度
-    watched, total = get_ad_progress_from_config(config)
-    _report(progress_callback, phone, "config", f"获取广告任务 ({watched}/{total})",
-            current=watched, total=total)
-
-    # 检查是否全部已完成
-    if _all_ads_watched(config):
-        _report(progress_callback, phone, "done", "所有广告已观看完毕",
-                current=total, total=total, vip_before=vip_before, vip_after=vip_before)
-        base_result["status"] = STATUS_ALREADY_DONE
-        base_result["vip_after"] = vip_before
-        _save_claim_record(account.id, base_result, source=source)
-        return base_result
-
-    # 4. 对每种 business 逐一领取
     total_claimed = 0
     total_failed = 0
+    total = 0
+    vip_before = 0
 
-    for idx, business in enumerate(BUSINESS_TYPES):
-        # 切换 business 类型时短暂等待
-        if idx > 0:
-            time.sleep(BUSINESS_SLEEP)
+    # ── PC 端领取 ──
+    if target != "mobile":
+        # 2. 查询领取前 VIP 时长
+        _report(progress_callback, phone, "before", "查询当前时长")
+        before = client.fetch_pc_duration()
+        if before.get("_error"):
+            if _is_auth_error(before):
+                base_result["status"] = STATUS_AUTH_ERROR
+                base_result["error_msg"] = "token 已过期"
+                return base_result
+            base_result["error_msg"] = f"查询时长失败: {before.get('msg')}"
+            return base_result
+        vip_before = int(before.get("vip_duration_second", 0))
+        base_result["vip_before"] = vip_before
 
-        _report(progress_callback, phone, f"business_{business}", f"领取 business={business}")
+        # 3. 获取广告任务列表
+        _report(progress_callback, phone, "config", "获取广告任务")
+        config = client.fetch_pc_ad_config()
+        if config.get("_error"):
+            base_result["error_msg"] = f"获取任务列表失败: {config.get('msg')}"
+            return base_result
 
-        claimed, failed = _claim_business_phase(
-            client, business, settings, phone, progress_callback,
-        )
+        # 上报初始广告进度
+        watched, total = get_ad_progress_from_config(config)
+        _report(progress_callback, phone, "config", f"获取广告任务 ({watched}/{total})",
+                current=watched, total=total)
 
-        total_claimed += claimed
-        total_failed += failed
-
-        # 检查认证错误（token 中途过期）
-        if failed > 0 and not client.get_auth_token():
-            # token 被清除说明遇到了认证错误
-            pass
-
-    base_result["claimed"] = total_claimed
-    base_result["failed"] = total_failed
-
-    # 5. 查询领取后 VIP 时长
-    _report(progress_callback, phone, "after", "查询领取后时长")
-    after = client.fetch_pc_duration()
-    if after.get("_error"):
-        if _is_auth_error(after):
-            base_result["status"] = STATUS_AUTH_ERROR
-            base_result["error_msg"] = "领取后 token 过期"
+        # 检查是否全部已完成
+        if _all_ads_watched(config):
+            _report(progress_callback, phone, "done", "所有广告已观看完毕",
+                    current=total, total=total, vip_before=vip_before, vip_after=vip_before)
+            base_result["status"] = STATUS_ALREADY_DONE
+            base_result["vip_after"] = vip_before
             _save_claim_record(account.id, base_result, source=source)
             return base_result
 
-    vip_after = int(after.get("vip_duration_second", vip_before))
-    base_result["vip_after"] = vip_after
+        # 4. 对每种 business 逐一领取
+        total_claimed = 0
+        total_failed = 0
+
+        for idx, business in enumerate(BUSINESS_TYPES):
+            if idx > 0:
+                time.sleep(BUSINESS_SLEEP)
+
+            _report(progress_callback, phone, f"business_{business}", f"领取 business={business}")
+
+            claimed, failed = _claim_business_phase(
+                client, business, settings, phone, progress_callback,
+            )
+
+            total_claimed += claimed
+            total_failed += failed
+
+            if failed > 0 and not client.get_auth_token():
+                pass
+
+        base_result["claimed"] = total_claimed
+        base_result["failed"] = total_failed
+
+        # 5. 查询领取后 VIP 时长
+        _report(progress_callback, phone, "after", "查询领取后时长")
+        after = client.fetch_pc_duration()
+        if after.get("_error"):
+            if _is_auth_error(after):
+                base_result["status"] = STATUS_AUTH_ERROR
+                base_result["error_msg"] = "领取后 token 过期"
+                _save_claim_record(account.id, base_result, source=source)
+                return base_result
+
+        vip_after = int(after.get("vip_duration_second", vip_before))
+        base_result["vip_after"] = vip_after
+
+    # ── 手机端领取 ──
+    if target != "pc":
+        _report(progress_callback, phone, "mobile", "开始手机端领取")
+        mobile_claimed, mobile_failed = _claim_mobile_phase(
+            client, settings, phone, progress_callback,
+        )
+        total_claimed += mobile_claimed
+        total_failed += mobile_failed
+        base_result["claimed"] = total_claimed
+        base_result["failed"] = total_failed
 
     # 判断最终状态
     if total_failed > 0 and total_claimed == 0:
@@ -330,6 +363,122 @@ def _claim_business_phase(
     return claimed, failed
 
 
+# ── 手机端领取阶段 ──────────────────────────────────────────────
+
+def _claim_mobile_phase(
+    client: ApiClient,
+    settings: dict,
+    phone: str,
+    progress_callback: Callable | None = None,
+) -> tuple[int, int]:
+    """手机端广告领取阶段。
+
+    与 PC 端独立：使用 MOBILE_AD_ID 和 MOBILE_BUSINESS，数据源为
+    fetch_mobile_ad_activity() 而非 fetch_pc_ad_config()。
+
+    循环逻辑:
+    1. fetch_mobile_ad_activity() → video_bar
+    2. 统计 has_award=True 且 is_get=False 的待领取任务数
+    3. pending == 0 → 全部完成，退出
+    4. 发送 pc_ad_callback_backup(MOBILE_AD_ID, MOBILE_BUSINESS)
+    5. 等待后重新获取 activity，统计 pending_after
+    6. pending_after < pending_before → 有进展，重置 stalled
+    7. 连续 MAX_STALLED_ROUNDS 轮无进展 → 退出
+
+    Returns:
+        (claimed 成功次数, failed 失败次数)
+    """
+    claimed = 0
+    failed = 0
+    stalled_rounds = 0
+    round_num = 0
+    request_interval = settings.get("request_interval", 1.0)
+    # 手机端最大轮数比 PC 端少（通常 7 个广告）
+    mobile_max_rounds = settings.get("mobile_max_rounds", 21)
+
+    while round_num < mobile_max_rounds:
+        if not client.get_auth_token():
+            logger.warning("[%s] Token 无效，停止手机端领取", phone)
+            break
+
+        # 查手机端广告任务
+        activity = client.fetch_mobile_ad_activity()
+        if activity.get("_error"):
+            if _is_auth_error(activity):
+                client.clear_auth_token()
+                logger.warning("[%s] 手机端认证错误，退出", phone)
+                break
+            logger.warning("[%s] 获取手机端任务失败: %s", phone, activity.get("msg"))
+            failed += 1
+            continue
+
+        video_bar = activity.get("video_bar", [])
+        pending_before = len([t for t in video_bar if t.get("has_award") and not t.get("is_get")])
+
+        if pending_before == 0:
+            logger.info("[%s] 手机端广告已全部领取，退出", phone)
+            _report(progress_callback, phone, "mobile_done", "手机端广告已全部领取")
+            break
+
+        round_num += 1
+        logger.info(
+            "[%s] mobile round=%d pending_before=%d stalled=%d → 发送回调",
+            phone, round_num, pending_before, stalled_rounds,
+        )
+        _report(progress_callback, phone, f"m_r{round_num}",
+                f"手机端第{round_num}轮 (pending={pending_before})")
+
+        result = client.pc_ad_callback_backup(MOBILE_AD_ID, MOBILE_BUSINESS)
+        is_verify = bool(result.get("is_verify", False))
+
+        if result.get("_error"):
+            if _is_auth_error(result):
+                client.clear_auth_token()
+                failed += 1
+                logger.warning("[%s] 手机端认证错误，退出", phone)
+                break
+            logger.warning("[%s] 手机端回调失败 round=%d: %s", phone, round_num, result.get("msg"))
+            failed += 1
+        elif is_verify:
+            claimed += 1
+            logger.info("[%s] mobile round=%d is_verify=True claimed=%d", phone, round_num, claimed)
+        else:
+            failed += 1
+            logger.info("[%s] mobile round=%d is_verify=False failed=%d", phone, round_num, failed)
+
+        time.sleep(request_interval)
+
+        # 再查手机端任务
+        activity2 = client.fetch_mobile_ad_activity()
+        if activity2.get("_error"):
+            logger.warning("[%s] 获取手机端任务失败 round=%d", phone, round_num)
+            continue
+
+        video_bar2 = activity2.get("video_bar", [])
+        pending_after = len([t for t in video_bar2 if t.get("has_award") and not t.get("is_get")])
+
+        logger.info(
+            "[%s] mobile round=%d pending_before=%d pending_after=%d is_verify=%s stalled=%d",
+            phone, round_num, pending_before, pending_after, is_verify, stalled_rounds,
+        )
+
+        if pending_after < pending_before:
+            stalled_rounds = 0
+        else:
+            stalled_rounds += 1
+            logger.info(
+                "[%s] mobile round=%d 无进展 stalled=%d/%d",
+                phone, round_num, stalled_rounds, MAX_STALLED_ROUNDS,
+            )
+            if stalled_rounds >= MAX_STALLED_ROUNDS:
+                _report(progress_callback, phone, "mobile_stalled",
+                        f"手机端连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                logger.info("[%s] 手机端连续%d轮无进展，停止", phone, MAX_STALLED_ROUNDS)
+                break
+
+    return claimed, failed
+
+
 # ── 多账号并发领取 ────────────────────────────────────────────────
 
 def run_concurrent_claim(
@@ -337,6 +486,7 @@ def run_concurrent_claim(
     settings: dict[str, Any] | None = None,
     progress_callback: Callable | None = None,
     source: str = "service",
+    target: str = "all",
 ) -> list[dict[str, Any]]:
     """并发领取多个账号。
 
@@ -345,6 +495,7 @@ def run_concurrent_claim(
         settings: 设置 dict。
         progress_callback: 进度回调。
         source: 来源标识（"service" 或 "gui"），传递给 claim_for_account。
+        target: 领取目标（"all" / "pc" / "mobile"）。
 
     Returns:
         结果列表（完成顺序，非提交顺序）。
@@ -357,7 +508,7 @@ def run_concurrent_claim(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_account = {
-            executor.submit(claim_for_account, acc, settings, progress_callback, source): acc
+            executor.submit(claim_for_account, acc, settings, progress_callback, source, target): acc
             for acc in accounts
         }
         for future in as_completed(future_to_account):

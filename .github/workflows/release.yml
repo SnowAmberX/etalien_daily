@@ -39,9 +39,25 @@ jobs:
         run: |
           Compress-Archive -Path release/etalien-daily-windows-x64 -DestinationPath etalien-daily-windows-x64.zip -Force
 
+      - name: Extract changelog
+        id: changelog
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $content = Get-Content CHANGELOG.md -Raw
+          if ($content -match "## \[$version\][^\n]*\n((?:(?!## \[).*\n?)*)") {
+            $body = $matches[1].Trim()
+            echo "changelog_body<<EOF" >> $env:GITHUB_OUTPUT
+            echo "$body" >> $env:GITHUB_OUTPUT
+            echo "EOF" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "changelog_body=See CHANGELOG.md for details." >> $env:GITHUB_OUTPUT
+          }
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           files: etalien-daily-windows-x64.zip
+          body: ${{ steps.changelog.outputs.changelog_body }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

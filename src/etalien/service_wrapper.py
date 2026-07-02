@@ -12,6 +12,7 @@ import logging
 import sys
 from ctypes import wintypes
 from datetime import datetime, date
+from logging.handlers import TimedRotatingFileHandler
 
 logger = logging.getLogger(__name__)
 
@@ -311,8 +312,10 @@ def run_service() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler(
+            TimedRotatingFileHandler(
                 _get_service_log_path(),
+                when="midnight",
+                backupCount=7,
                 encoding="utf-8",
             ),
         ],

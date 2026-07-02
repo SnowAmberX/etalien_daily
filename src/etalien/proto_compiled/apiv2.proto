@@ -78,3 +78,23 @@ message MobilePcProductItem {
 message MobilePcProductListResponse {
     repeated MobilePcProductItem list = 1;
 }
+
+// 手机端广告任务列表
+// GET /award/v1/ad/activity
+message AdActivityRequest {
+    // 空请求体（GET 请求无需 body）
+}
+
+message AdActivityItem {
+    int64 id = 1;
+    bool has_award = 2;
+    int64 award = 3;
+    bool is_get = 4;
+}
+
+message AdActivityResponse {
+    int64 user_watch_cnt = 1;
+    int64 video_cnt = 2;
+    repeated AdActivityItem video_bar = 3;
+    int64 activity_status = 4;
+}

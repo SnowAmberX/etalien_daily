@@ -127,6 +127,38 @@ class ApiClient:
 
         return result
 
+    def login_by_password(self, phone_number: str, password: str) -> dict[str, Any]:
+        """密码登录。
+
+        POST /v2/account/login
+        请求体: LoginV2Request
+        响应: LoginV2Response
+
+        成功时自动保存 auth_token 到 session headers。
+
+        Returns:
+            成功: {"_ok": True, "user_id": ..., "authorization": ...}
+            失败: {"_error": True, "code": ..., "msg": ...}
+        """
+        req = proto.LoginV2Request(
+            phone_number=phone_number,
+            password=password,
+        )
+        body = req.SerializeToString()
+
+        result = self._retry_request(
+            method="POST",
+            path="/v2/account/login",
+            body_data=body,
+            response_cls=proto.LoginV2Response,
+        )
+
+        # 登录成功，自动保存 token
+        if not result.get("_error") and result.get("authorization"):
+            self.update_auth_token(result["authorization"])
+
+        return result
+
     def fetch_pc_ad_config(self) -> dict[str, Any]:
         """获取广告任务列表。
 
@@ -210,13 +242,30 @@ class ApiClient:
         GET /account/v1/my_profile
 
         Returns:
-            成功: {"_ok": True, "user_id": ..., "nickname": ..., "avatar_url": ...}
+            成功: {"_ok": True, "user_id": ..., "nickname": ..., "avatar": ...,
+                   "member": {...}, "mobile_not_get_ad_duration": ...}
             失败: {"_error": True, "code": ..., "msg": ...}
         """
         return self._retry_request(
             method="GET",
             path="/account/v1/my_profile",
             response_cls=proto.MyProfileResponse,
+        )
+
+    def fetch_mobile_ad_activity(self) -> dict[str, Any]:
+        """获取手机端广告任务列表。
+
+        GET /award/v1/ad/activity
+
+        Returns:
+            成功: {"_ok": True, "user_watch_cnt": ..., "video_cnt": ...,
+                   "video_bar": [...], "activity_status": ...}
+            失败: {"_error": True, "code": ..., "msg": ...}
+        """
+        return self._retry_request(
+            method="GET",
+            path="/award/v1/ad/activity",
+            response_cls=proto.AdActivityResponse,
         )
 
     # ── 内部方法 ───────────────────────────────────────────────

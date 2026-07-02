@@ -95,6 +95,8 @@ def init_db(db_path: str | None = None) -> None:
         _ensure_column(conn, "claim_history", "week_start REAL DEFAULT 0")
         _ensure_column(conn, "claim_history", "source TEXT DEFAULT 'service'")
         _ensure_column(conn, "claim_history", "detail TEXT DEFAULT ''")
+        # 幂等迁移：为旧 accounts 表补充 password 列
+        _ensure_column(conn, "accounts", "password TEXT DEFAULT ''")
         # 回填旧数据的 week_start（粗略用当前周）
         conn.execute(
             "UPDATE claim_history SET week_start = ? WHERE week_start IS NULL OR week_start = 0",
@@ -107,6 +109,7 @@ def init_db(db_path: str | None = None) -> None:
             ("max_concurrent", "10"),
             ("request_interval", "1.0"),
             ("max_rounds", "21"),
+            ("mobile_max_rounds", "21"),
             ("schedule_time", "08:00"),
             ("schedule_enabled", "false"),
             ("schedule_method", "schtasks"),
@@ -128,6 +131,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     auth_token TEXT DEFAULT NULL,
     user_id    INTEGER DEFAULT 0,
     device_id  TEXT NOT NULL,
+    password   TEXT DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -192,12 +196,13 @@ class Account:
     auth_token: str | None = None
     user_id: int = 0
     device_id: str = ""
+    password: str = ""
     id: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        """转换为 dict（不含敏感 token，用于 API 返回）。"""
+        """转换为 dict（不含敏感 token 和密码，用于 API 返回）。"""
         return {
             "name": self.name,
             "phone": self.phone,
@@ -208,6 +213,7 @@ class Account:
             "id": self.id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "has_password": bool(self.password),
         }
 
 
@@ -222,6 +228,7 @@ def _account_from_row(row: sqlite3.Row) -> Account:
         auth_token=row["auth_token"],
         user_id=row["user_id"],
         device_id=row["device_id"],
+        password=row["password"] if "password" in row.keys() else "",
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -275,6 +282,7 @@ def add_account(
     name: str = "",
     remark: str = "",
     device_id: str | None = None,
+    password: str = "",
     db_path: str | None = None,
 ) -> Account:
     """添加新账号。
@@ -288,9 +296,9 @@ def add_account(
     conn = get_connection(db_path)
     try:
         conn.execute(
-            """INSERT INTO accounts (phone, name, remark, device_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (phone, name, remark, device_id, now, now),
+            """INSERT INTO accounts (phone, name, remark, device_id, password, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (phone, name, remark, device_id, password, now, now),
         )
         conn.commit()
         return Account(
@@ -298,6 +306,7 @@ def add_account(
             name=name,
             remark=remark,
             device_id=device_id,
+            password=password,
             created_at=now,
             updated_at=now,
             id=conn.execute("SELECT last_insert_rowid()").fetchone()[0],
@@ -312,7 +321,7 @@ def update_account(phone: str, db_path: str | None = None, **fields) -> bool:
     支持的字段: name, remark, enabled, auth_token, user_id, device_id
     自动更新 updated_at。
     """
-    allowed = {"name", "remark", "enabled", "auth_token", "user_id", "device_id"}
+    allowed = {"name", "remark", "enabled", "auth_token", "user_id", "device_id", "password"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return False
@@ -371,6 +380,7 @@ _DEFAULT_SETTINGS = {
     "max_concurrent": "10",
     "request_interval": "1.0",
     "max_rounds": "21",
+    "mobile_max_rounds": "21",
     "schedule_time": "08:00",
     "schedule_enabled": "false",
     "schedule_method": "schtasks",
@@ -380,6 +390,7 @@ _SETTINGS_VALIDATORS = {
     "max_concurrent": lambda v: max(1, min(50, int(v))),
     "request_interval": lambda v: max(0.1, min(30.0, float(v))),
     "max_rounds": lambda v: max(1, min(200, int(v))),
+    "mobile_max_rounds": lambda v: max(1, min(200, int(v))),
     "schedule_time": lambda v: str(v),
     "schedule_enabled": lambda v: "true" if str(v).lower() in ("true", "1", "yes") else "false",
     "schedule_method": lambda v: v if str(v) in ("schtasks", "service") else "schtasks",
@@ -402,6 +413,8 @@ def get_settings(db_path: str | None = None) -> dict[str, Any]:
             result["request_interval"] = float(result["request_interval"])
         if "max_rounds" in result:
             result["max_rounds"] = int(result["max_rounds"])
+        if "mobile_max_rounds" in result:
+            result["mobile_max_rounds"] = int(result["mobile_max_rounds"])
         if "schedule_enabled" in result:
             result["schedule_enabled"] = result["schedule_enabled"] == "true"
 
@@ -412,7 +425,7 @@ def get_settings(db_path: str | None = None) -> dict[str, Any]:
 
 def update_settings(db_path: str | None = None, **kwargs) -> bool:
     """更新设置（部分更新），自动验证范围。"""
-    allowed = {"max_concurrent", "request_interval", "max_rounds", "schedule_time", "schedule_enabled", "schedule_method"}
+    allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "schedule_time", "schedule_enabled", "schedule_method"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return False
