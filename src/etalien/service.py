@@ -6,6 +6,7 @@
 - 防死循环 + 认证错误检测 + 进度回调
 """
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +33,9 @@ BUSINESS_SLEEP = 3.0           # 业务类型切换间隔（秒）
 # 手机端常量
 MOBILE_AD_ID = "102815305"     # 手机端广告 ID
 MOBILE_BUSINESS = 2            # 手机端业务类型
+
+# 翻译端常量
+TRANSLATE_AD_ID = "103334281"  # 翻译广告 ID（待确认）
 
 
 # ── 结果状态 ──────────────────────────────────────────────────────
@@ -147,9 +151,13 @@ def claim_for_account(
     total_failed = 0
     total = 0
     vip_before = 0
+    vip_after = 0
+    run_pc = target in ("all", "pc")
+    run_mobile = target in ("all", "mobile")
+    run_translate = target in ("all", "translate")
 
     # ── PC 端领取 ──
-    if target != "mobile":
+    if run_pc:
         # 2. 查询领取前 VIP 时长
         _report(progress_callback, phone, "before", "查询当前时长")
         before = client.fetch_pc_duration()
@@ -221,7 +229,7 @@ def claim_for_account(
         base_result["vip_after"] = vip_after
 
     # ── 手机端领取 ──
-    if target != "pc":
+    if run_mobile:
         # 每 3 天执行一次
         now = time.time()
         if account.last_mobile_claim > 0 and (now - account.last_mobile_claim) < 259200:
@@ -238,6 +246,21 @@ def claim_for_account(
             base_result["failed"] = total_failed
             # 记录手机领取时间
             update_account(phone, last_mobile_claim=now)
+
+    # ── 翻译领取 ──
+    if run_translate:
+        logger.info("[%s] 进入翻译领取检查 (last_translate_claim=%.0f, now=%.0f, diff=%.0f)", 
+                    phone, account.last_translate_claim, time.time(), time.time() - account.last_translate_claim)
+        now2 = time.time()
+        _report(progress_callback, phone, "translate", "开始翻译领取")
+        translate_claimed, translate_failed = _claim_translate_phase(
+            client, settings, phone, progress_callback,
+        )
+        total_claimed += translate_claimed
+        total_failed += translate_failed
+        base_result["claimed"] = total_claimed
+        base_result["failed"] = total_failed
+        update_account(phone, last_translate_claim=now2)
 
     # 判断最终状态
     if total_failed > 0 and total_claimed == 0:
@@ -287,6 +310,8 @@ def _claim_business_phase(
     round_num = 0
     request_interval = settings.get("request_interval", 1.0)
     max_rounds = settings.get("max_rounds", 21)
+    translate_retry_limit = max(1, int(settings.get("translate_retry_limit", 3)))
+    logger.info("[%s] 翻译领取重试上限=%d", phone, translate_retry_limit)
 
     while round_num < max_rounds:
         # 检查 token
@@ -486,6 +511,109 @@ def _claim_mobile_phase(
 
     return claimed, failed
 
+
+# ── 翻译领取阶段 ──────────────────────────────────────────────
+
+def _claim_translate_phase(
+    client: ApiClient,
+    settings: dict,
+    phone: str,
+    progress_callback: Callable | None = None,
+) -> tuple[int, int]:
+    """翻译次数领取阶段。
+
+    POST /v2/account/translate/ad/config 返回 PcAdConfigResponse，
+    遍历所有 level 中 is_watch=false 的 item，发送 pc_ad_callback_backup 回调。
+    使用 item_id 和 item 的 level 作为 business。
+
+    Returns:
+        (claimed 成功次数, failed 失败次数)
+    """
+    claimed = 0
+    failed = 0
+    stalled_rounds = 0
+    round_num = 0
+    request_interval = settings.get("request_interval", 1.0)
+    max_rounds = settings.get("max_rounds", 21)
+    error_streak = 0
+    max_errors = 3
+
+    while round_num < max_rounds:
+        if not client.get_auth_token():
+            logger.warning("[%s] Token 无效，停止翻译领取", phone)
+            break
+
+        # POST ad/config 即领取（返回最新进度）
+        config = client.fetch_translate_ad_config()
+        logger.info("[%s] 翻译配置响应: list=%d", phone, len(config.get("list", [])))
+
+        if config.get("_error"):
+            error_streak += 1
+            if _is_auth_error(config):
+                client.clear_auth_token()
+                logger.warning("[%s] 翻译认证错误，退出", phone)
+                break
+            logger.warning("[%s] 获取翻译任务失败: %s (连续%d)", phone, config.get("msg"), error_streak)
+            failed += 1
+            if error_streak >= max_errors:
+                logger.warning("[%s] 翻译连续%d次错误，退出", phone, max_errors)
+                break
+            continue
+
+        error_streak = 0
+
+        # 统计进度
+        tasks = config.get("list", [])
+        total_items = sum(len(_get_level_items(level)) for level in tasks)
+        watched_before = sum(
+            1 for level in tasks
+            for item in _get_level_items(level)
+            if bool(item.get("is_watch", False))
+        )
+
+        if watched_before >= total_items and total_items > 0:
+            logger.info("[%s] 翻译任务已全部完成 (%d/%d)，退出", phone, watched_before, total_items)
+            _report(progress_callback, phone, "translate_done", f"翻译任务已全部完成 ({watched_before}/{total_items})")
+            break
+
+        round_num += 1
+        logger.info(
+            "[%s] translate round=%d watched=%d/%d stalled=%d",
+            phone, round_num, watched_before, total_items, stalled_rounds,
+        )
+        _report(progress_callback, phone, f"t_r{round_num}",
+                f"翻译第{round_num}轮 (watched={watched_before}/{total_items})")
+
+        time.sleep(request_interval)
+
+        # 再查确认进度变化
+        config2 = client.fetch_translate_ad_config()
+        if config2.get("_error"):
+            logger.warning("[%s] 获取翻译任务失败 round=%d", phone, round_num)
+            continue
+
+        tasks2 = config2.get("list", [])
+        watched_after = sum(
+            1 for level in tasks2
+            for item in _get_level_items(level)
+            if bool(item.get("is_watch", False))
+        )
+
+        if watched_after > watched_before:
+            stalled_rounds = 0
+            claimed += watched_after - watched_before
+            logger.info("[%s] translate round=%d 进展 +%d (%d→%d)",
+                       phone, round_num, watched_after - watched_before, watched_before, watched_after)
+        else:
+            stalled_rounds += 1
+            logger.info("[%s] translate round=%d 无进展 stalled=%d/%d",
+                       phone, round_num, stalled_rounds, MAX_STALLED_ROUNDS)
+            if stalled_rounds >= MAX_STALLED_ROUNDS:
+                _report(progress_callback, phone, "translate_stalled",
+                        f"翻译连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                break
+
+    return claimed, failed
 
 # ── 多账号并发领取 ────────────────────────────────────────────────
 

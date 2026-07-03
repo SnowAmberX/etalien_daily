@@ -173,10 +173,13 @@ function renderAccountCards(accounts) {
     const progressStr = acc.token_valid ? `${acc.current || 0}/${acc.total || 0}` : '-/-';
     const mobilePct = acc.token_valid && acc.mobile_total > 0 ? Math.min(100, Math.round((acc.mobile_current || 0) / acc.mobile_total * 100)) : 0;
     const mobileProgressStr = acc.mobile_current !== undefined ? `${acc.mobile_current || 0}/${acc.mobile_total || 0}` : '-/-';
+    const translatePct = acc.token_valid && acc.translate_total > 0 ? Math.min(100, Math.round((acc.translate_current || 0) / acc.translate_total * 100)) : 0;
+    const translateProgressStr = acc.translate_current !== undefined ? `${acc.translate_current || 0}/${acc.translate_total || 0}` : '-/-';
     var vipParts = [];
     if (acc.token_valid) {
       vipParts.push('VIP: ' + fmtDuration(acc.vip_duration || 0));
       if (acc.mobile_duration > 0) vipParts.push('手机: ' + fmtDuration(acc.mobile_duration));
+      if (acc.translate_count > 0) vipParts.push('翻译: ' + acc.translate_count + '次');
     }
     const vipStr = vipParts.length ? vipParts.join(' · ') : '';
     const needsLogin = !acc.logged_in || !acc.token_valid;
@@ -207,6 +210,11 @@ function renderAccountCards(accounts) {
         <div class="account-progress-fill" style="width:${mobilePct}%"></div>
       </div>
       <div class="account-progress-label">手机 ${mobileProgressStr}</div>` : ''}
+      ${acc.translate_current !== undefined ? `
+      <div class="account-progress-wrap">
+        <div class="account-progress-fill" style="width:${translatePct}%"></div>
+      </div>
+      <div class="account-progress-label">翻译 ${translateProgressStr}</div>` : ''}
       <span class="acct-status ${statusClass}">${statusLabel(acc.status)}</span>
     </div>`;
   }).join('');
@@ -374,7 +382,7 @@ function addLog(phone, msg, cls) {
 }
 
 async function startClaim(target = 'all') {
-  const labels = { all: '全部领取', pc: '仅 PC', mobile: '仅手机' };
+  const labels = { all: '全部领取', pc: '仅 PC', mobile: '仅手机', translate: '翻译' };
   _claimTarget = labels[target];
   const btn = document.getElementById('btn-claim-start');
   btn.disabled = true; btn.textContent = '启动中...';

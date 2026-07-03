@@ -268,6 +268,38 @@ class ApiClient:
             response_cls=proto.AdActivityResponse,
         )
 
+    def fetch_translate_product(self) -> dict[str, Any]:
+        """获取翻译次数（POST 空 body，返回 Member）。
+
+        POST /v2/account/translate/product/list
+        """
+        return self._retry_request(
+            method="POST",
+            path="/v2/account/translate/product/list",
+            response_cls=proto.Member,
+        )
+
+    def fetch_translate_ad_config(self) -> dict[str, Any]:
+        """获取翻译广告任务配置（POST 空 body，返回 PcAdConfigResponse）。
+
+        POST /v2/account/translate/ad/config
+
+        Returns:
+            成功: {"_ok": True, "list": [{"level":..., "items":[...]}, ...]}
+            失败: {"_error": True, "code": ..., "msg": ...}
+        """
+        result = self._retry_request(
+            method="POST",
+            path="/v2/account/translate/ad/config",
+            response_cls=proto.PcAdConfigResponse,
+        )
+        if not result.get("_error") and "list" in result:
+            for level_item in result["list"]:
+                items = level_item.get("items") or level_item.get("list") or []
+                for it in items:
+                    it["is_watch"] = bool(it.get("is_watch", False))
+        return result
+
     # ── 内部方法 ───────────────────────────────────────────────
 
     def _retry_request(

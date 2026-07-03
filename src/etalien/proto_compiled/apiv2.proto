@@ -98,3 +98,9 @@ message AdActivityResponse {
     repeated AdActivityItem video_bar = 3;
     int64 activity_status = 4;
 }
+
+// 翻译次数查询
+// GET /v2/account/translate/product/list
+message TranslateProductResponse {
+    int64 expire_time = 1;
+}

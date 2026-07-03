@@ -338,6 +338,26 @@ def create_app() -> Flask:
             except Exception:
                 pass
 
+            # 翻译任务进度（静默获取）
+            translate_current = 0
+            translate_total = 0
+            translate_progress = "-/-"
+            translate_count = 0
+            try:
+                config = client.fetch_translate_ad_config()
+                if not config.get("_error"):
+                    tw, tt = get_ad_progress_from_config(config)
+                    translate_current = tw
+                    translate_total = tt
+                    translate_progress = f"{tw}/{tt}" if tt > 0 else "-/-"
+                product = client.fetch_translate_product()
+                logger.info("[status] 翻译次数 product=%s",
+                           {k: v for k, v in product.items() if not k.startswith("_")})
+                if not product.get("_error"):
+                    translate_count = int(product.get("expire_time") or product.get("expireTime") or 0)
+            except Exception:
+                pass
+
             return {
                 **base,
                 "logged_in": True,
@@ -353,6 +373,10 @@ def create_app() -> Flask:
                 "mobile_current": mobile_current,
                 "mobile_total": mobile_total,
                 "mobile_duration": mobile_duration,
+                "translate_progress": translate_progress,
+                "translate_current": translate_current,
+                "translate_total": translate_total,
+                "translate_count": translate_count,
             }
 
         with ThreadPoolExecutor(max_workers=min(len(accounts), 10)) as executor:
@@ -389,7 +413,7 @@ def create_app() -> Flask:
     def start_claim():
         data = request.get_json(silent=True) or {}
         target = data.get("target", "all")
-        if target not in ("all", "pc", "mobile"):
+        if target not in ("all", "pc", "mobile", "translate"):
             target = "all"
 
         run_id = claim_manager.start()
@@ -403,6 +427,7 @@ def create_app() -> Flask:
 
         settings = get_settings()
         account_map = {acc.phone: acc for acc in accounts}
+        logger.info("开始领取任务 target=%s account_count=%d run_id=%s", target, len(accounts), run_id)
 
         # 为每个账号添加初始进度条目
         for acc in accounts:
@@ -442,6 +467,7 @@ def create_app() -> Flask:
             if "vip_after" in extra:
                 updates["vip_after"] = extra["vip_after"]
 
+            logger.info("[%s] 领取进度 step=%s detail=%s extra=%s", phone, step, detail, extra)
             claim_manager.update_progress_entry(phone, updates)
 
             # 写入领取事件到数据库
@@ -483,6 +509,7 @@ def create_app() -> Flask:
                         "total": r.get("claimed", 0) + r.get("failed", 0),
                         "error": r.get("error_msg"),
                     })
+                logger.info("领取任务完成 run_id=%s result_count=%d", run_id, len(results))
             except Exception as e:
                 logger.error("领取异常: %s", e)
             finally:
@@ -505,7 +532,7 @@ def create_app() -> Flask:
     @app.route("/api/settings", methods=["PUT"])
     def settings_update():
         data = request.get_json(silent=True) or {}
-        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "schedule_time",
+        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "translate_retry_limit", "schedule_time",
                    "schedule_enabled", "schedule_method"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
@@ -770,3 +797,4 @@ def find_free_port() -> int:
             if s.connect_ex(("127.0.0.1", port)) != 0:
                 return port
     raise RuntimeError(f"端口范围 {PORT_START}-{PORT_END} 均已占用")
+

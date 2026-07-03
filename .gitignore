@@ -22,3 +22,5 @@ config/etalien.db
 # OS
 .DS_Store
 Thumbs.db
+src/etalien/proto_decode.py
+AGENTS.md

@@ -35,6 +35,7 @@ from .apiv2_pb2 import (
     PcAdConfigResponse,
     UpdatePauseStateRequest,
     UpdatePauseStateResponse,
+    TranslateProductResponse,
 )
 from .error_pb2 import Error
 
