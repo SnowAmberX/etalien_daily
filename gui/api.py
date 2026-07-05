@@ -334,7 +334,7 @@ def create_app() -> Flask:
                     mobile_progress = f"{mobile_current}/{mobile_total}" if mobile_total > 0 else "-/-"
                 profile = client.fetch_my_profile()
                 if not profile.get("_error"):
-                    mobile_duration = int(profile.get("mobile_not_get_ad_duration", 0))
+                    mobile_duration = int(profile.get("remaining_seconds", 0))
             except Exception:
                 pass
 

@@ -243,14 +243,19 @@ class ApiClient:
 
         Returns:
             成功: {"_ok": True, "user_id": ..., "nickname": ..., "avatar": ...,
-                   "member": {...}, "mobile_not_get_ad_duration": ...}
+                   "member": {...}, "mobile_not_get_ad_duration": ...,
+                   "remaining_seconds": ...}   ← 手机端加速时长余额（秒）
             失败: {"_error": True, "code": ..., "msg": ...}
         """
-        return self._retry_request(
+        result = self._retry_request(
             method="GET",
             path="/account/v1/my_profile",
             response_cls=proto.MyProfileResponse,
         )
+        if result.get("_ok") and "member" in result and result["member"]:
+            expire = result["member"].get("expire_time", 0)
+            result["remaining_seconds"] = max(0, expire - int(time.time()))
+        return result
 
     def fetch_mobile_ad_activity(self) -> dict[str, Any]:
         """获取手机端广告任务列表。
