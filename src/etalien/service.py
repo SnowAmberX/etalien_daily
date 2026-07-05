@@ -35,7 +35,8 @@ MOBILE_AD_ID = "102815305"     # 手机端广告 ID
 MOBILE_BUSINESS = 2            # 手机端业务类型
 
 # 翻译端常量
-TRANSLATE_AD_ID = "103334281"  # 翻译广告 ID（待确认）
+TRANSLATE_AD_ID = "103579416"  # 翻译广告 ID
+TRANSLATE_BUSINESS = 3          # 翻译业务类型
 
 
 # ── 结果状态 ──────────────────────────────────────────────────────
@@ -310,8 +311,6 @@ def _claim_business_phase(
     round_num = 0
     request_interval = settings.get("request_interval", 1.0)
     max_rounds = settings.get("max_rounds", 21)
-    translate_retry_limit = max(1, int(settings.get("translate_retry_limit", 3)))
-    logger.info("[%s] 翻译领取重试上限=%d", phone, translate_retry_limit)
 
     while round_num < max_rounds:
         # 检查 token
@@ -520,11 +519,21 @@ def _claim_translate_phase(
     phone: str,
     progress_callback: Callable | None = None,
 ) -> tuple[int, int]:
-    """翻译次数领取阶段。
+    """翻译广告领取阶段。
 
-    POST /v2/account/translate/ad/config 返回 PcAdConfigResponse，
-    遍历所有 level 中 is_watch=false 的 item，发送 pc_ad_callback_backup 回调。
-    使用 item_id 和 item 的 level 作为 business。
+    基于 translate/ad/config 的多阶段广告进度循环领取。
+    翻译广告共 4 个阶段 (1+4+5+5=15)，每轮发一次 callback，
+    通过 config 的 is_watch 统计全局进度决定是否继续。
+
+    循环逻辑:
+    1. fetch_translate_ad_config() → 统计 watched_before / total / unwatched_before
+    2. unwatched_before == 0 → 全部完成，退出
+    3. pc_ad_callback_backup(TRANSLATE_AD_ID, TRANSLATE_BUSINESS)
+    4. sleep(request_interval)
+    5. 再次 fetch_translate_ad_config() → 统计 watched_after
+    6. watched_after > watched_before → 有进展，重置 stalled_rounds
+    7. watched_after == watched_before → stalled_rounds += 1
+    8. 连续 translate_retry_limit 轮无进展 → 退出（防死循环）
 
     Returns:
         (claimed 成功次数, failed 失败次数)
@@ -534,84 +543,115 @@ def _claim_translate_phase(
     stalled_rounds = 0
     round_num = 0
     request_interval = settings.get("request_interval", 1.0)
-    max_rounds = settings.get("max_rounds", 21)
-    error_streak = 0
-    max_errors = 3
+    translate_max_rounds = max(1, int(settings.get("translate_max_rounds", 20)))
+    translate_retry_limit = max(1, int(settings.get("translate_retry_limit", 3)))
+    logger.info("[%s] translate_max_rounds=%d translate_retry_limit=%d",
+                phone, translate_max_rounds, translate_retry_limit)
 
-    while round_num < max_rounds:
+    while round_num < translate_max_rounds:
         if not client.get_auth_token():
             logger.warning("[%s] Token 无效，停止翻译领取", phone)
             break
 
-        # POST ad/config 即领取（返回最新进度）
+        # 1. 查询翻译广告配置 → 统计进度
         config = client.fetch_translate_ad_config()
-        logger.info("[%s] 翻译配置响应: list=%d", phone, len(config.get("list", [])))
-
         if config.get("_error"):
-            error_streak += 1
             if _is_auth_error(config):
                 client.clear_auth_token()
                 logger.warning("[%s] 翻译认证错误，退出", phone)
                 break
-            logger.warning("[%s] 获取翻译任务失败: %s (连续%d)", phone, config.get("msg"), error_streak)
+            logger.warning("[%s] 获取翻译任务失败: %s", phone, config.get("msg"))
             failed += 1
-            if error_streak >= max_errors:
-                logger.warning("[%s] 翻译连续%d次错误，退出", phone, max_errors)
-                break
             continue
 
-        error_streak = 0
-
-        # 统计进度
         tasks = config.get("list", [])
-        total_items = sum(len(_get_level_items(level)) for level in tasks)
-        watched_before = sum(
-            1 for level in tasks
-            for item in _get_level_items(level)
-            if bool(item.get("is_watch", False))
+        watched_before, total_items = get_ad_progress_from_config(config)
+        unwatched_before = total_items - watched_before
+
+        # 打印各阶段详情
+        level_counts = [len(_get_level_items(lv)) for lv in tasks]
+        level_watched = [
+            sum(1 for it in _get_level_items(lv) if bool(it.get("is_watch", False)))
+            for lv in tasks
+        ]
+        logger.info(
+            "[%s] translate levels=%d counts=%s watched=%s progress=%d/%d",
+            phone, len(tasks), level_counts, level_watched, watched_before, total_items,
         )
 
-        if watched_before >= total_items and total_items > 0:
-            logger.info("[%s] 翻译任务已全部完成 (%d/%d)，退出", phone, watched_before, total_items)
-            _report(progress_callback, phone, "translate_done", f"翻译任务已全部完成 ({watched_before}/{total_items})")
+        # 全部已观看，退出
+        if unwatched_before == 0:
+            logger.info("[%s] 翻译广告已全部观看 (%d/%d)，退出", phone, watched_before, total_items)
+            _report(progress_callback, phone, "translate_done",
+                    f"翻译广告已全部完成 ({watched_before}/{total_items})",
+                    current=watched_before, total=total_items)
             break
 
         round_num += 1
         logger.info(
-            "[%s] translate round=%d watched=%d/%d stalled=%d",
-            phone, round_num, watched_before, total_items, stalled_rounds,
+            "[%s] translate round=%d watched=%d/%d unwatched=%d stalled=%d → 发送回调",
+            phone, round_num, watched_before, total_items, unwatched_before, stalled_rounds,
         )
         _report(progress_callback, phone, f"t_r{round_num}",
-                f"翻译第{round_num}轮 (watched={watched_before}/{total_items})")
+                f"翻译第{round_num}轮 (progress={watched_before}/{total_items})",
+                current=watched_before, total=total_items)
+
+        # 2. 发送回调
+        result = client.pc_ad_callback_backup(TRANSLATE_AD_ID, TRANSLATE_BUSINESS)
+        is_verify = bool(result.get("is_verify", False))
+        logger.info("[%s] translate round=%d callback is_verify=%s", phone, round_num, is_verify)
+
+        if result.get("_error"):
+            if _is_auth_error(result):
+                client.clear_auth_token()
+                failed += 1
+                logger.warning("[%s] 翻译认证错误，退出", phone)
+                break
+            logger.warning("[%s] 翻译回调失败 round=%d: %s", phone, round_num, result.get("msg"))
+            failed += 1
+        elif not is_verify:
+            failed += 1
+            logger.info("[%s] translate round=%d is_verify=False failed=%d", phone, round_num, failed)
 
         time.sleep(request_interval)
 
-        # 再查确认进度变化
+        # 3. 再次查询配置 → 比较进度变化
         config2 = client.fetch_translate_ad_config()
         if config2.get("_error"):
-            logger.warning("[%s] 获取翻译任务失败 round=%d", phone, round_num)
+            logger.warning("[%s] 获取翻译任务失败 round=%d (after callback)", phone, round_num)
             continue
 
-        tasks2 = config2.get("list", [])
-        watched_after = sum(
-            1 for level in tasks2
-            for item in _get_level_items(level)
-            if bool(item.get("is_watch", False))
-        )
+        watched_after, _ = get_ad_progress_from_config(config2)
+        logger.info("[%s] translate round=%d watched_after=%d (before=%d)",
+                   phone, round_num, watched_after, watched_before)
 
         if watched_after > watched_before:
+            gained = watched_after - watched_before
+            claimed += gained
             stalled_rounds = 0
-            claimed += watched_after - watched_before
             logger.info("[%s] translate round=%d 进展 +%d (%d→%d)",
-                       phone, round_num, watched_after - watched_before, watched_before, watched_after)
+                       phone, round_num, gained, watched_before, watched_after)
+            _report(progress_callback, phone, f"t_r{round_num}",
+                    f"翻译进展 +{gained} ({watched_before}→{watched_after})",
+                    current=watched_after, total=total_items)
         else:
             stalled_rounds += 1
             logger.info("[%s] translate round=%d 无进展 stalled=%d/%d",
-                       phone, round_num, stalled_rounds, MAX_STALLED_ROUNDS)
-            if stalled_rounds >= MAX_STALLED_ROUNDS:
+                       phone, round_num, stalled_rounds, translate_retry_limit)
+            if stalled_rounds >= translate_retry_limit:
                 _report(progress_callback, phone, "translate_stalled",
-                        f"翻译连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                        f"翻译连续{translate_retry_limit}轮无进展，停止")
+                logger.info("[%s] 翻译连续%d轮无进展，停止", phone, translate_retry_limit)
                 break
+
+    # 最终校验：打印翻译次数
+    try:
+        final = client.fetch_translate_product()
+        if not final.get("_error"):
+            final_count = _safe_parse_translate_count(final)
+            logger.info("[%s] translate final translate_count=%d", phone, final_count)
+    except Exception:
+        pass
 
     return claimed, failed
 
@@ -722,6 +762,30 @@ def get_ad_progress_from_config(config: dict) -> tuple[int, int]:
         total += len(items)
         watched += sum(1 for item in items if bool(item.get("is_watch", False)))
     return watched, total
+
+
+def _safe_parse_translate_count(product: dict) -> int:
+    """从翻译产品响应中安全解析 translate_count。
+
+    MessageToDict 会将 protobuf int64 转为字符串（如 "7"），
+    本函数处理字符串、int、缺失、空字符串、非法值等情况，
+    始终返回 int，不抛异常。
+
+    Args:
+        product: fetch_translate_product() 的返回 dict
+
+    Returns:
+        翻译次数（int），解析失败返回 0
+    """
+    if not product or not isinstance(product, dict):
+        return 0
+    raw = product.get("expire_time", 0)
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("_safe_parse_translate_count: 无法解析 expire_time=%r，返回 0", raw)
+        return 0
+    return max(0, count)
 
 
 def _is_auth_error(result: dict) -> bool:

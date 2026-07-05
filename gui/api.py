@@ -31,7 +31,7 @@ from etalien.db import (
     update_account_token,
     update_settings,
 )
-from etalien.service import get_ad_progress_from_config, run_concurrent_claim
+from etalien.service import _safe_parse_translate_count, get_ad_progress_from_config, run_concurrent_claim
 from gui import claim_manager
 
 logger = logging.getLogger(__name__)
@@ -374,20 +374,28 @@ def create_app() -> Flask:
             translate_total = 0
             translate_progress = "-/-"
             translate_count = 0
+            translate_error = False
             try:
+                # 获取广告进度（watched/total）
                 config = client.fetch_translate_ad_config()
                 if not config.get("_error"):
                     tw, tt = get_ad_progress_from_config(config)
                     translate_current = tw
                     translate_total = tt
                     translate_progress = f"{tw}/{tt}" if tt > 0 else "-/-"
+                # 获取翻译次数
                 product = client.fetch_translate_product()
                 logger.info("[status] 翻译次数 product=%s",
                            {k: v for k, v in product.items() if not k.startswith("_")})
                 if not product.get("_error"):
-                    translate_count = int(product.get("expire_time") or product.get("expireTime") or 0)
+                    translate_count = _safe_parse_translate_count(product)
+                else:
+                    translate_error = True
+                    logger.warning("[status] %s 翻译次数查询失败: %s",
+                                   acc.phone, product.get("msg", "unknown"))
             except Exception:
-                pass
+                translate_error = True
+                logger.exception("[status] %s 翻译次数查询异常", acc.phone)
 
             return {
                 **base,
@@ -409,6 +417,7 @@ def create_app() -> Flask:
                 "translate_current": translate_current,
                 "translate_total": translate_total,
                 "translate_count": translate_count,
+                "translate_error": translate_error,
             }
 
         with ThreadPoolExecutor(max_workers=min(len(accounts), 10)) as executor:
@@ -569,7 +578,7 @@ def create_app() -> Flask:
     @app.route("/api/settings", methods=["PUT"])
     def settings_update():
         data = request.get_json(silent=True) or {}
-        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "translate_retry_limit", "schedule_time",
+        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "translate_retry_limit", "translate_max_rounds", "schedule_time",
                    "schedule_enabled", "schedule_method"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:

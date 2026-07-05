@@ -281,9 +281,15 @@ class ApiClient:
         )
 
     def fetch_translate_product(self) -> dict[str, Any]:
-        """获取翻译次数（POST 空 body，返回 Member）。
+        """获取翻译次数。
 
         POST /v2/account/translate/product/list
+        响应使用 Member 结构（type=1, expire_time=2），
+        expire_time 实际表示当前可用翻译次数。
+
+        Returns:
+            成功: {"_ok": True, "expire_time": "16"}  # expire_time 是可用翻译次数
+            失败: {"_error": True, "code": ..., "msg": ...}
         """
         return self._retry_request(
             method="POST",
@@ -292,12 +298,13 @@ class ApiClient:
         )
 
     def fetch_translate_ad_config(self) -> dict[str, Any]:
-        """获取翻译广告任务配置（POST 空 body，返回 PcAdConfigResponse）。
+        """获取翻译广告任务配置（多阶段，含 watched/unwatched 进度）。
 
         POST /v2/account/translate/ad/config
 
         Returns:
-            成功: {"_ok": True, "list": [{"level":..., "items":[...]}, ...]}
+            成功: {"_ok": True, "list": [{"level":..., "list":[...]}, ...]}
+                 每个 item 含 is_watch 字段表示是否已观看
             失败: {"_error": True, "code": ..., "msg": ...}
         """
         result = self._retry_request(

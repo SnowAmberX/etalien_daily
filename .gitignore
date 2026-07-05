@@ -24,6 +24,7 @@ config/etalien.db
 Thumbs.db
 
 src/etalien/proto_decode.py
+config
 
 # agent
 AGENTS.md

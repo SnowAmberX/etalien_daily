@@ -180,7 +180,8 @@ function renderAccountCards(accounts) {
       vipParts.push('VIP: ' + fmtDuration(acc.vip_duration || 0));
       if (acc.mobile_error) vipParts.push('手机: 查询失败');
       else vipParts.push('手机: ' + fmtDuration(acc.mobile_duration || 0));
-      if (acc.translate_count > 0) vipParts.push('翻译: ' + acc.translate_count + '次');
+      if (acc.translate_error) vipParts.push('翻译: 查询失败');
+      else vipParts.push('翻译: ' + (acc.translate_count || 0) + '次');
     }
     const vipStr = vipParts.length ? vipParts.join(' · ') : '';
     const needsLogin = !acc.logged_in || !acc.token_valid;

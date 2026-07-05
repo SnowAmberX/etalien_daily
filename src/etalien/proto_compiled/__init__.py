@@ -46,6 +46,8 @@ _RESPONSE_TYPES: dict[str, type] = {
     "/v2/account/pc/ad/config": PcAdConfigResponse,
     "/v2/account/pc/ad/callback/backup": PcAdCallbackBackupResponse,
     "/v2/account/remain/duration": GetUserRemainDurationResponse,
+    "/v2/account/translate/product/list": Member,
+    "/v2/account/translate/ad/config": PcAdConfigResponse,
 }
 
 
