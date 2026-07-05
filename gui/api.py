@@ -278,6 +278,11 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             if not client.check_token_valid():
@@ -292,6 +297,11 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             dur = client.fetch_pc_duration()
@@ -312,17 +322,24 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             watched, total = get_ad_progress_from_config(config)
             progress_str = f"{watched}/{total}"
             status = "all_done" if total > 0 and watched >= total else "ok"
 
-            # 手机端数据（静默获取，失败不影响 PC 端显示）
+            # 手机端数据
             mobile_current = 0
             mobile_total = 0
             mobile_progress = "-/-"
             mobile_duration = 0
+            mobile_error = False
+            # 手机端广告任务
             try:
                 activity = client.fetch_mobile_ad_activity()
                 if not activity.get("_error"):
@@ -332,11 +349,25 @@ def create_app() -> Flask:
                     mobile_total = len([t for t in video_bar if t.get("has_award")])
                     mobile_current = mobile_total - len(pending)
                     mobile_progress = f"{mobile_current}/{mobile_total}" if mobile_total > 0 else "-/-"
+                else:
+                    mobile_error = True
+                    logger.warning("[status] %s 手机端 activity 查询失败: %s",
+                                   acc.phone, activity.get("msg", "unknown"))
+            except Exception:
+                mobile_error = True
+                logger.exception("[status] %s 手机端 activity 查询异常", acc.phone)
+            # 手机端加速时长（独立 try，activity 失败不影响 profile）
+            try:
                 profile = client.fetch_my_profile()
                 if not profile.get("_error"):
                     mobile_duration = int(profile.get("remaining_seconds", 0))
+                else:
+                    mobile_error = True
+                    logger.warning("[status] %s 手机端 profile 查询失败: %s",
+                                   acc.phone, profile.get("msg", "unknown"))
             except Exception:
-                pass
+                mobile_error = True
+                logger.exception("[status] %s 手机端 profile 查询异常", acc.phone)
 
             # 翻译任务进度（静默获取）
             translate_current = 0
@@ -373,6 +404,7 @@ def create_app() -> Flask:
                 "mobile_current": mobile_current,
                 "mobile_total": mobile_total,
                 "mobile_duration": mobile_duration,
+                "mobile_error": mobile_error,
                 "translate_progress": translate_progress,
                 "translate_current": translate_current,
                 "translate_total": translate_total,
@@ -402,6 +434,11 @@ def create_app() -> Flask:
                         "progress": "-/-",
                         "current": 0,
                         "total": 0,
+                        "mobile_duration": 0,
+                        "mobile_progress": "-/-",
+                        "mobile_current": 0,
+                        "mobile_total": 0,
+                        "mobile_error": False,
                     })
 
         results.sort(key=lambda r: r["phone"])

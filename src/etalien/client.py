@@ -252,9 +252,16 @@ class ApiClient:
             path="/account/v1/my_profile",
             response_cls=proto.MyProfileResponse,
         )
+        remain = 0
         if result.get("_ok") and "member" in result and result["member"]:
-            expire = result["member"].get("expire_time", 0)
-            result["remaining_seconds"] = max(0, expire - int(time.time()))
+            raw = result["member"].get("expire_time") or result["member"].get("expireTime") or 0
+            try:
+                expire = int(raw)
+            except (TypeError, ValueError):
+                logger.warning("fetch_my_profile: 无法解析 expire_time=%r，设为 0", raw)
+                expire = 0
+            remain = max(0, expire - int(time.time()))
+        result["remaining_seconds"] = remain
         return result
 
     def fetch_mobile_ad_activity(self) -> dict[str, Any]:

@@ -178,7 +178,8 @@ function renderAccountCards(accounts) {
     var vipParts = [];
     if (acc.token_valid) {
       vipParts.push('VIP: ' + fmtDuration(acc.vip_duration || 0));
-      if (acc.mobile_duration > 0) vipParts.push('手机: ' + fmtDuration(acc.mobile_duration));
+      if (acc.mobile_error) vipParts.push('手机: 查询失败');
+      else vipParts.push('手机: ' + fmtDuration(acc.mobile_duration || 0));
       if (acc.translate_count > 0) vipParts.push('翻译: ' + acc.translate_count + '次');
     }
     const vipStr = vipParts.length ? vipParts.join(' · ') : '';
@@ -668,9 +669,11 @@ function statusLabel(s) {
   return m[s] || s;
 }
 function fmtDuration(s) {
-  if (!s || s <= 0) return '-';
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
-  return h > 0 ? h + 'h' + m + 'm' : m > 0 ? m + 'm' : s + 's';
+  if (!s || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
 }
 function fmtTime(ts) {
   if (!ts) return '-';

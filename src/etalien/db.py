@@ -375,6 +375,8 @@ def delete_account(phone: str, db_path: str | None = None) -> bool:
         account_id = row["id"]
         # 删除关联的领取历史
         conn.execute("DELETE FROM claim_history WHERE account_id = ?", (account_id,))
+        # 删除关联的领取事件
+        conn.execute("DELETE FROM claim_events WHERE account_id = ?", (account_id,))
         # 删除账号
         conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         conn.commit()
