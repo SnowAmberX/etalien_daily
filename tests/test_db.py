@@ -52,7 +52,7 @@ class TestInitDb(TestDbBase):
         # 不应有重复数据
         conn = get_connection()
         rows = conn.execute("SELECT COUNT(*) FROM settings").fetchone()
-        self.assertEqual(rows[0], 7)  # 7 个默认设置
+        self.assertEqual(rows[0], 8)  # 8 个默认设置
         conn.close()
 
     def test_tables_exist(self):

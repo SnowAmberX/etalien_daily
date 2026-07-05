@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+from logging.handlers import TimedRotatingFileHandler
 
 import webview
 
@@ -20,6 +21,28 @@ from gui import claim_manager
 from gui.api import PORT_END, PORT_START, create_app, find_free_port
 
 logger = logging.getLogger(__name__)
+
+
+def _setup_logging() -> None:
+    """GUI 模式文件日志。"""
+    try:
+        from etalien.db import get_db_path
+        config_dir = os.path.dirname(get_db_path())
+        log_path = os.path.join(config_dir, "etalien-gui.log")
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            handlers=[
+                TimedRotatingFileHandler(
+                    log_path, when="midnight", backupCount=7, encoding="utf-8",
+                ),
+            ],
+            force=True,
+        )
+        logging.getLogger("etalien").setLevel(logging.INFO)
+    except Exception:
+        pass
 
 
 # ── WindowApi ────────────────────────────────────────────────────
@@ -152,6 +175,9 @@ def main() -> None:
 
     # 初始化数据库
     init_db()
+
+    # 初始化文件日志
+    _setup_logging()
 
     # 启动 Flask
     app = create_app()

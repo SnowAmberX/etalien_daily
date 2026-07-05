@@ -31,7 +31,7 @@ from etalien.db import (
     update_account_token,
     update_settings,
 )
-from etalien.service import get_ad_progress_from_config, run_concurrent_claim
+from etalien.service import _safe_parse_translate_count, get_ad_progress_from_config, run_concurrent_claim
 from gui import claim_manager
 
 logger = logging.getLogger(__name__)
@@ -278,6 +278,11 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             if not client.check_token_valid():
@@ -292,6 +297,11 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             dur = client.fetch_pc_duration()
@@ -312,17 +322,24 @@ def create_app() -> Flask:
                     "progress": "-/-",
                     "current": 0,
                     "total": 0,
+                    "mobile_duration": 0,
+                    "mobile_progress": "-/-",
+                    "mobile_current": 0,
+                    "mobile_total": 0,
+                    "mobile_error": False,
                 }
 
             watched, total = get_ad_progress_from_config(config)
             progress_str = f"{watched}/{total}"
             status = "all_done" if total > 0 and watched >= total else "ok"
 
-            # 手机端数据（静默获取，失败不影响 PC 端显示）
+            # 手机端数据
             mobile_current = 0
             mobile_total = 0
             mobile_progress = "-/-"
             mobile_duration = 0
+            mobile_error = False
+            # 手机端广告任务
             try:
                 activity = client.fetch_mobile_ad_activity()
                 if not activity.get("_error"):
@@ -332,11 +349,53 @@ def create_app() -> Flask:
                     mobile_total = len([t for t in video_bar if t.get("has_award")])
                     mobile_current = mobile_total - len(pending)
                     mobile_progress = f"{mobile_current}/{mobile_total}" if mobile_total > 0 else "-/-"
+                else:
+                    mobile_error = True
+                    logger.warning("[status] %s 手机端 activity 查询失败: %s",
+                                   acc.phone, activity.get("msg", "unknown"))
+            except Exception:
+                mobile_error = True
+                logger.exception("[status] %s 手机端 activity 查询异常", acc.phone)
+            # 手机端加速时长（独立 try，activity 失败不影响 profile）
+            try:
                 profile = client.fetch_my_profile()
                 if not profile.get("_error"):
-                    mobile_duration = int(profile.get("mobile_not_get_ad_duration", 0))
+                    mobile_duration = int(profile.get("remaining_seconds", 0))
+                else:
+                    mobile_error = True
+                    logger.warning("[status] %s 手机端 profile 查询失败: %s",
+                                   acc.phone, profile.get("msg", "unknown"))
             except Exception:
-                pass
+                mobile_error = True
+                logger.exception("[status] %s 手机端 profile 查询异常", acc.phone)
+
+            # 翻译任务进度（静默获取）
+            translate_current = 0
+            translate_total = 0
+            translate_progress = "-/-"
+            translate_count = 0
+            translate_error = False
+            try:
+                # 获取广告进度（watched/total）
+                config = client.fetch_translate_ad_config()
+                if not config.get("_error"):
+                    tw, tt = get_ad_progress_from_config(config)
+                    translate_current = tw
+                    translate_total = tt
+                    translate_progress = f"{tw}/{tt}" if tt > 0 else "-/-"
+                # 获取翻译次数
+                product = client.fetch_translate_product()
+                logger.info("[status] 翻译次数 product=%s",
+                           {k: v for k, v in product.items() if not k.startswith("_")})
+                if not product.get("_error"):
+                    translate_count = _safe_parse_translate_count(product)
+                else:
+                    translate_error = True
+                    logger.warning("[status] %s 翻译次数查询失败: %s",
+                                   acc.phone, product.get("msg", "unknown"))
+            except Exception:
+                translate_error = True
+                logger.exception("[status] %s 翻译次数查询异常", acc.phone)
 
             return {
                 **base,
@@ -353,6 +412,12 @@ def create_app() -> Flask:
                 "mobile_current": mobile_current,
                 "mobile_total": mobile_total,
                 "mobile_duration": mobile_duration,
+                "mobile_error": mobile_error,
+                "translate_progress": translate_progress,
+                "translate_current": translate_current,
+                "translate_total": translate_total,
+                "translate_count": translate_count,
+                "translate_error": translate_error,
             }
 
         with ThreadPoolExecutor(max_workers=min(len(accounts), 10)) as executor:
@@ -378,6 +443,11 @@ def create_app() -> Flask:
                         "progress": "-/-",
                         "current": 0,
                         "total": 0,
+                        "mobile_duration": 0,
+                        "mobile_progress": "-/-",
+                        "mobile_current": 0,
+                        "mobile_total": 0,
+                        "mobile_error": False,
                     })
 
         results.sort(key=lambda r: r["phone"])
@@ -389,7 +459,7 @@ def create_app() -> Flask:
     def start_claim():
         data = request.get_json(silent=True) or {}
         target = data.get("target", "all")
-        if target not in ("all", "pc", "mobile"):
+        if target not in ("all", "pc", "mobile", "translate"):
             target = "all"
 
         run_id = claim_manager.start()
@@ -403,6 +473,7 @@ def create_app() -> Flask:
 
         settings = get_settings()
         account_map = {acc.phone: acc for acc in accounts}
+        logger.info("开始领取任务 target=%s account_count=%d run_id=%s", target, len(accounts), run_id)
 
         # 为每个账号添加初始进度条目
         for acc in accounts:
@@ -419,6 +490,14 @@ def create_app() -> Flask:
         def _progress_callback(phone, step, detail, **extra):
             """将 service 的回调转为进度条目更新 + DB 事件记录。"""
             updates = {}
+            # 根据 step 判断 phase
+            if step.startswith("b") or step in ("config", "before", "after"):
+                updates["phase"] = "pc"
+            elif step.startswith("m_") or step.startswith("mobile"):
+                updates["phase"] = "mobile"
+            elif step.startswith("t_") or step.startswith("translate"):
+                updates["phase"] = "translate"
+
             if step == "done" or step == "after":
                 updates["status"] = "done"
             elif step == "already_done":
@@ -442,6 +521,7 @@ def create_app() -> Flask:
             if "vip_after" in extra:
                 updates["vip_after"] = extra["vip_after"]
 
+            logger.info("[%s] 领取进度 step=%s detail=%s extra=%s", phone, step, detail, extra)
             claim_manager.update_progress_entry(phone, updates)
 
             # 写入领取事件到数据库
@@ -473,7 +553,8 @@ def create_app() -> Flask:
                     source="gui",
                     target=target,
                 )
-                # 用最终结果更新进度
+                # 用最终结果更新进度（保留 phase）
+                final_phase = target if target in ("pc", "mobile", "translate") else "pc"
                 for r in results:
                     claim_manager.update_progress_entry(r["phone"], {
                         "status": r["status"],
@@ -482,7 +563,9 @@ def create_app() -> Flask:
                         "current": r.get("claimed", 0),
                         "total": r.get("claimed", 0) + r.get("failed", 0),
                         "error": r.get("error_msg"),
+                        "phase": final_phase,
                     })
+                logger.info("领取任务完成 run_id=%s result_count=%d", run_id, len(results))
             except Exception as e:
                 logger.error("领取异常: %s", e)
             finally:
@@ -505,7 +588,7 @@ def create_app() -> Flask:
     @app.route("/api/settings", methods=["PUT"])
     def settings_update():
         data = request.get_json(silent=True) or {}
-        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "schedule_time",
+        allowed = {"max_concurrent", "request_interval", "max_rounds", "mobile_max_rounds", "translate_retry_limit", "translate_max_rounds", "schedule_time",
                    "schedule_enabled", "schedule_method"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
@@ -770,3 +853,4 @@ def find_free_port() -> int:
             if s.connect_ex(("127.0.0.1", port)) != 0:
                 return port
     raise RuntimeError(f"端口范围 {PORT_START}-{PORT_END} 均已占用")
+

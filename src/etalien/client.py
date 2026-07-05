@@ -243,14 +243,26 @@ class ApiClient:
 
         Returns:
             成功: {"_ok": True, "user_id": ..., "nickname": ..., "avatar": ...,
-                   "member": {...}, "mobile_not_get_ad_duration": ...}
+                   "member": {...}, "mobile_not_get_ad_duration": ...,
+                   "remaining_seconds": ...}   ← 手机端加速时长余额（秒）
             失败: {"_error": True, "code": ..., "msg": ...}
         """
-        return self._retry_request(
+        result = self._retry_request(
             method="GET",
             path="/account/v1/my_profile",
             response_cls=proto.MyProfileResponse,
         )
+        remain = 0
+        if result.get("_ok") and "member" in result and result["member"]:
+            raw = result["member"].get("expire_time") or result["member"].get("expireTime") or 0
+            try:
+                expire = int(raw)
+            except (TypeError, ValueError):
+                logger.warning("fetch_my_profile: 无法解析 expire_time=%r，设为 0", raw)
+                expire = 0
+            remain = max(0, expire - int(time.time()))
+        result["remaining_seconds"] = remain
+        return result
 
     def fetch_mobile_ad_activity(self) -> dict[str, Any]:
         """获取手机端广告任务列表。
@@ -267,6 +279,45 @@ class ApiClient:
             path="/award/v1/ad/activity",
             response_cls=proto.AdActivityResponse,
         )
+
+    def fetch_translate_product(self) -> dict[str, Any]:
+        """获取翻译次数。
+
+        POST /v2/account/translate/product/list
+        响应使用 Member 结构（type=1, expire_time=2），
+        expire_time 实际表示当前可用翻译次数。
+
+        Returns:
+            成功: {"_ok": True, "expire_time": "16"}  # expire_time 是可用翻译次数
+            失败: {"_error": True, "code": ..., "msg": ...}
+        """
+        return self._retry_request(
+            method="POST",
+            path="/v2/account/translate/product/list",
+            response_cls=proto.Member,
+        )
+
+    def fetch_translate_ad_config(self) -> dict[str, Any]:
+        """获取翻译广告任务配置（多阶段，含 watched/unwatched 进度）。
+
+        POST /v2/account/translate/ad/config
+
+        Returns:
+            成功: {"_ok": True, "list": [{"level":..., "list":[...]}, ...]}
+                 每个 item 含 is_watch 字段表示是否已观看
+            失败: {"_error": True, "code": ..., "msg": ...}
+        """
+        result = self._retry_request(
+            method="POST",
+            path="/v2/account/translate/ad/config",
+            response_cls=proto.PcAdConfigResponse,
+        )
+        if not result.get("_error") and "list" in result:
+            for level_item in result["list"]:
+                items = level_item.get("items") or level_item.get("list") or []
+                for it in items:
+                    it["is_watch"] = bool(it.get("is_watch", False))
+        return result
 
     # ── 内部方法 ───────────────────────────────────────────────
 

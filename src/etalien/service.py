@@ -6,6 +6,7 @@
 - 防死循环 + 认证错误检测 + 进度回调
 """
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +33,10 @@ BUSINESS_SLEEP = 3.0           # 业务类型切换间隔（秒）
 # 手机端常量
 MOBILE_AD_ID = "102815305"     # 手机端广告 ID
 MOBILE_BUSINESS = 2            # 手机端业务类型
+
+# 翻译端常量
+TRANSLATE_AD_ID = "103579416"  # 翻译广告 ID
+TRANSLATE_BUSINESS = 3          # 翻译业务类型
 
 
 # ── 结果状态 ──────────────────────────────────────────────────────
@@ -147,9 +152,13 @@ def claim_for_account(
     total_failed = 0
     total = 0
     vip_before = 0
+    vip_after = 0
+    run_pc = target in ("all", "pc")
+    run_mobile = target in ("all", "mobile")
+    run_translate = target in ("all", "translate")
 
     # ── PC 端领取 ──
-    if target != "mobile":
+    if run_pc:
         # 2. 查询领取前 VIP 时长
         _report(progress_callback, phone, "before", "查询当前时长")
         before = client.fetch_pc_duration()
@@ -221,7 +230,7 @@ def claim_for_account(
         base_result["vip_after"] = vip_after
 
     # ── 手机端领取 ──
-    if target != "pc":
+    if run_mobile:
         # 每 3 天执行一次
         now = time.time()
         if account.last_mobile_claim > 0 and (now - account.last_mobile_claim) < 259200:
@@ -238,6 +247,21 @@ def claim_for_account(
             base_result["failed"] = total_failed
             # 记录手机领取时间
             update_account(phone, last_mobile_claim=now)
+
+    # ── 翻译领取 ──
+    if run_translate:
+        logger.info("[%s] 进入翻译领取检查 (last_translate_claim=%.0f, now=%.0f, diff=%.0f)", 
+                    phone, account.last_translate_claim, time.time(), time.time() - account.last_translate_claim)
+        now2 = time.time()
+        _report(progress_callback, phone, "translate", "开始翻译领取")
+        translate_claimed, translate_failed = _claim_translate_phase(
+            client, settings, phone, progress_callback,
+        )
+        total_claimed += translate_claimed
+        total_failed += translate_failed
+        base_result["claimed"] = total_claimed
+        base_result["failed"] = total_failed
+        update_account(phone, last_translate_claim=now2)
 
     # 判断最终状态
     if total_failed > 0 and total_claimed == 0:
@@ -422,10 +446,13 @@ def _claim_mobile_phase(
 
         video_bar = activity.get("video_bar", [])
         pending_before = len([t for t in video_bar if t.get("has_award") and not t.get("is_get")])
+        mobile_total = len([t for t in video_bar if t.get("has_award")])
+        mobile_current_before = mobile_total - pending_before
 
         if pending_before == 0:
             logger.info("[%s] 手机端广告已全部领取，退出", phone)
-            _report(progress_callback, phone, "mobile_done", "手机端广告已全部领取")
+            _report(progress_callback, phone, "mobile_done", "手机端广告已全部领取",
+                    current=mobile_current_before, total=mobile_total)
             break
 
         round_num += 1
@@ -434,7 +461,8 @@ def _claim_mobile_phase(
             phone, round_num, pending_before, stalled_rounds,
         )
         _report(progress_callback, phone, f"m_r{round_num}",
-                f"手机端第{round_num}轮 (pending={pending_before})")
+                f"手机端第{round_num}轮 (pending={pending_before})",
+                current=mobile_current_before, total=mobile_total)
 
         result = client.pc_ad_callback_backup(MOBILE_AD_ID, MOBILE_BUSINESS)
         is_verify = bool(result.get("is_verify", False))
@@ -480,12 +508,157 @@ def _claim_mobile_phase(
             )
             if stalled_rounds >= MAX_STALLED_ROUNDS:
                 _report(progress_callback, phone, "mobile_stalled",
-                        f"手机端连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                        f"手机端连续{MAX_STALLED_ROUNDS}轮无进展，停止",
+                        current=mobile_current_before, total=mobile_total)
                 logger.info("[%s] 手机端连续%d轮无进展，停止", phone, MAX_STALLED_ROUNDS)
                 break
 
     return claimed, failed
 
+
+# ── 翻译领取阶段 ──────────────────────────────────────────────
+
+def _claim_translate_phase(
+    client: ApiClient,
+    settings: dict,
+    phone: str,
+    progress_callback: Callable | None = None,
+) -> tuple[int, int]:
+    """翻译广告领取阶段。
+
+    基于 translate/ad/config 的多阶段广告进度循环领取。
+    翻译广告共 4 个阶段 (1+4+5+5=15)，每轮发一次 callback，
+    通过 config 的 is_watch 统计全局进度决定是否继续。
+
+    循环逻辑:
+    1. fetch_translate_ad_config() → 统计 watched_before / total / unwatched_before
+    2. unwatched_before == 0 → 全部完成，退出
+    3. pc_ad_callback_backup(TRANSLATE_AD_ID, TRANSLATE_BUSINESS)
+    4. sleep(request_interval)
+    5. 再次 fetch_translate_ad_config() → 统计 watched_after
+    6. watched_after > watched_before → 有进展，重置 stalled_rounds
+    7. watched_after == watched_before → stalled_rounds += 1
+    8. 连续 translate_retry_limit 轮无进展 → 退出（防死循环）
+
+    Returns:
+        (claimed 成功次数, failed 失败次数)
+    """
+    claimed = 0
+    failed = 0
+    stalled_rounds = 0
+    round_num = 0
+    request_interval = settings.get("request_interval", 1.0)
+    translate_max_rounds = max(1, int(settings.get("translate_max_rounds", 20)))
+    translate_retry_limit = max(1, int(settings.get("translate_retry_limit", 3)))
+    logger.info("[%s] translate_max_rounds=%d translate_retry_limit=%d",
+                phone, translate_max_rounds, translate_retry_limit)
+
+    while round_num < translate_max_rounds:
+        if not client.get_auth_token():
+            logger.warning("[%s] Token 无效，停止翻译领取", phone)
+            break
+
+        # 1. 查询翻译广告配置 → 统计进度
+        config = client.fetch_translate_ad_config()
+        if config.get("_error"):
+            if _is_auth_error(config):
+                client.clear_auth_token()
+                logger.warning("[%s] 翻译认证错误，退出", phone)
+                break
+            logger.warning("[%s] 获取翻译任务失败: %s", phone, config.get("msg"))
+            failed += 1
+            continue
+
+        tasks = config.get("list", [])
+        watched_before, total_items = get_ad_progress_from_config(config)
+        unwatched_before = total_items - watched_before
+
+        # 打印各阶段详情
+        level_counts = [len(_get_level_items(lv)) for lv in tasks]
+        level_watched = [
+            sum(1 for it in _get_level_items(lv) if bool(it.get("is_watch", False)))
+            for lv in tasks
+        ]
+        logger.info(
+            "[%s] translate levels=%d counts=%s watched=%s progress=%d/%d",
+            phone, len(tasks), level_counts, level_watched, watched_before, total_items,
+        )
+
+        # 全部已观看，退出
+        if unwatched_before == 0:
+            logger.info("[%s] 翻译广告已全部观看 (%d/%d)，退出", phone, watched_before, total_items)
+            _report(progress_callback, phone, "translate_done",
+                    f"翻译广告已全部完成 ({watched_before}/{total_items})",
+                    current=watched_before, total=total_items)
+            break
+
+        round_num += 1
+        logger.info(
+            "[%s] translate round=%d watched=%d/%d unwatched=%d stalled=%d → 发送回调",
+            phone, round_num, watched_before, total_items, unwatched_before, stalled_rounds,
+        )
+        _report(progress_callback, phone, f"t_r{round_num}",
+                f"翻译第{round_num}轮 (progress={watched_before}/{total_items})",
+                current=watched_before, total=total_items)
+
+        # 2. 发送回调
+        result = client.pc_ad_callback_backup(TRANSLATE_AD_ID, TRANSLATE_BUSINESS)
+        is_verify = bool(result.get("is_verify", False))
+        logger.info("[%s] translate round=%d callback is_verify=%s", phone, round_num, is_verify)
+
+        if result.get("_error"):
+            if _is_auth_error(result):
+                client.clear_auth_token()
+                failed += 1
+                logger.warning("[%s] 翻译认证错误，退出", phone)
+                break
+            logger.warning("[%s] 翻译回调失败 round=%d: %s", phone, round_num, result.get("msg"))
+            failed += 1
+        elif not is_verify:
+            failed += 1
+            logger.info("[%s] translate round=%d is_verify=False failed=%d", phone, round_num, failed)
+
+        time.sleep(request_interval)
+
+        # 3. 再次查询配置 → 比较进度变化
+        config2 = client.fetch_translate_ad_config()
+        if config2.get("_error"):
+            logger.warning("[%s] 获取翻译任务失败 round=%d (after callback)", phone, round_num)
+            continue
+
+        watched_after, _ = get_ad_progress_from_config(config2)
+        logger.info("[%s] translate round=%d watched_after=%d (before=%d)",
+                   phone, round_num, watched_after, watched_before)
+
+        if watched_after > watched_before:
+            gained = watched_after - watched_before
+            claimed += gained
+            stalled_rounds = 0
+            logger.info("[%s] translate round=%d 进展 +%d (%d→%d)",
+                       phone, round_num, gained, watched_before, watched_after)
+            _report(progress_callback, phone, f"t_r{round_num}",
+                    f"翻译进展 +{gained} ({watched_before}→{watched_after})",
+                    current=watched_after, total=total_items)
+        else:
+            stalled_rounds += 1
+            logger.info("[%s] translate round=%d 无进展 stalled=%d/%d",
+                       phone, round_num, stalled_rounds, translate_retry_limit)
+            if stalled_rounds >= translate_retry_limit:
+                _report(progress_callback, phone, "translate_stalled",
+                        f"翻译连续{translate_retry_limit}轮无进展，停止")
+                logger.info("[%s] 翻译连续%d轮无进展，停止", phone, translate_retry_limit)
+                break
+
+    # 最终校验：打印翻译次数
+    try:
+        final = client.fetch_translate_product()
+        if not final.get("_error"):
+            final_count = _safe_parse_translate_count(final)
+            logger.info("[%s] translate final translate_count=%d", phone, final_count)
+    except Exception:
+        pass
+
+    return claimed, failed
 
 # ── 多账号并发领取 ────────────────────────────────────────────────
 
@@ -594,6 +767,30 @@ def get_ad_progress_from_config(config: dict) -> tuple[int, int]:
         total += len(items)
         watched += sum(1 for item in items if bool(item.get("is_watch", False)))
     return watched, total
+
+
+def _safe_parse_translate_count(product: dict) -> int:
+    """从翻译产品响应中安全解析 translate_count。
+
+    MessageToDict 会将 protobuf int64 转为字符串（如 "7"），
+    本函数处理字符串、int、缺失、空字符串、非法值等情况，
+    始终返回 int，不抛异常。
+
+    Args:
+        product: fetch_translate_product() 的返回 dict
+
+    Returns:
+        翻译次数（int），解析失败返回 0
+    """
+    if not product or not isinstance(product, dict):
+        return 0
+    raw = product.get("expire_time", 0)
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("_safe_parse_translate_count: 无法解析 expire_time=%r，返回 0", raw)
+        return 0
+    return max(0, count)
 
 
 def _is_auth_error(result: dict) -> bool:

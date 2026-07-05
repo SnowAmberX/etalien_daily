@@ -173,10 +173,15 @@ function renderAccountCards(accounts) {
     const progressStr = acc.token_valid ? `${acc.current || 0}/${acc.total || 0}` : '-/-';
     const mobilePct = acc.token_valid && acc.mobile_total > 0 ? Math.min(100, Math.round((acc.mobile_current || 0) / acc.mobile_total * 100)) : 0;
     const mobileProgressStr = acc.mobile_current !== undefined ? `${acc.mobile_current || 0}/${acc.mobile_total || 0}` : '-/-';
+    const translatePct = acc.token_valid && acc.translate_total > 0 ? Math.min(100, Math.round((acc.translate_current || 0) / acc.translate_total * 100)) : 0;
+    const translateProgressStr = acc.translate_current !== undefined ? `${acc.translate_current || 0}/${acc.translate_total || 0}` : '-/-';
     var vipParts = [];
     if (acc.token_valid) {
       vipParts.push('VIP: ' + fmtDuration(acc.vip_duration || 0));
-      if (acc.mobile_duration > 0) vipParts.push('手机: ' + fmtDuration(acc.mobile_duration));
+      if (acc.mobile_error) vipParts.push('手机: 查询失败');
+      else vipParts.push('手机: ' + fmtDuration(acc.mobile_duration || 0));
+      if (acc.translate_error) vipParts.push('翻译: 查询失败');
+      else vipParts.push('翻译: ' + (acc.translate_count || 0) + '次');
     }
     const vipStr = vipParts.length ? vipParts.join(' · ') : '';
     const needsLogin = !acc.logged_in || !acc.token_valid;
@@ -198,15 +203,20 @@ function renderAccountCards(accounts) {
       <div class="acct-phone">${escapeHtml(maskPhone(acc.phone))}</div>
       <div class="acct-name">${escapeHtml(acc.name || '-')}</div>
       ${acc.token_valid && vipStr ? `<div class="acct-vip">${vipStr}</div>` : ''}
-      <div class="account-progress-wrap">
+      <div class="account-progress-wrap" data-progress-phase="pc">
         <div class="account-progress-fill" style="width:${progressPct}%"></div>
       </div>
-      <div class="account-progress-label">PC ${progressStr}</div>
+      <div class="account-progress-label" data-progress-label="pc">PC ${progressStr}</div>
       ${acc.mobile_current !== undefined ? `
-      <div class="account-progress-wrap">
+      <div class="account-progress-wrap" data-progress-phase="mobile">
         <div class="account-progress-fill" style="width:${mobilePct}%"></div>
       </div>
-      <div class="account-progress-label">手机 ${mobileProgressStr}</div>` : ''}
+      <div class="account-progress-label" data-progress-label="mobile">手机 ${mobileProgressStr}</div>` : ''}
+      ${acc.translate_current !== undefined ? `
+      <div class="account-progress-wrap" data-progress-phase="translate">
+        <div class="account-progress-fill" style="width:${translatePct}%"></div>
+      </div>
+      <div class="account-progress-label" data-progress-label="translate">翻译 ${translateProgressStr}</div>` : ''}
       <span class="acct-status ${statusClass}">${statusLabel(acc.status)}</span>
     </div>`;
   }).join('');
@@ -374,7 +384,7 @@ function addLog(phone, msg, cls) {
 }
 
 async function startClaim(target = 'all') {
-  const labels = { all: '全部领取', pc: '仅 PC', mobile: '仅手机' };
+  const labels = { all: '全部领取', pc: '仅 PC', mobile: '仅手机', translate: '翻译' };
   _claimTarget = labels[target];
   const btn = document.getElementById('btn-claim-start');
   btn.disabled = true; btn.textContent = '启动中...';
@@ -400,7 +410,7 @@ async function pollClaimProgress() {
 
     // Update account card progress bars in real-time
     for (const e of entries) {
-      updateCardProgress(e.phone, e.current || 0, e.total || 0);
+      updateCardProgress(e.phone, e.phase || 'pc', e.current || 0, e.total || 0);
     }
 
     // Add log entries for state changes
@@ -429,19 +439,20 @@ async function pollClaimProgress() {
   } catch (_) {}
 }
 
-function updateCardProgress(phone, current, total) {
+function updateCardProgress(phone, phase, current, total) {
   const card = document.querySelector('.account-card[data-phone="' + phone + '"]');
   if (!card) return;
-  card.dataset.current = current;
-  card.dataset.total = total;
-  const fill = card.querySelector('.account-progress-fill');
-  const label = card.querySelector('.account-progress-label');
+  phase = phase || 'pc';
+  const fill = card.querySelector('[data-progress-phase="' + phase + '"] .account-progress-fill');
+  const label = card.querySelector('[data-progress-label="' + phase + '"]');
   if (fill) {
     const pct = total > 0 ? Math.min(100, Math.round(current / total * 100)) : 0;
     fill.style.width = pct + '%';
     if (pct >= 100) fill.classList.add('complete');
   }
-  if (label) label.textContent = `${current}/${total}`;
+  // Keep phase prefixes
+  const prefix = phase === 'pc' ? 'PC ' : phase === 'mobile' ? '手机 ' : '翻译 ';
+  if (label) label.textContent = prefix + current + '/' + total;
   recalcStatsFromCards();
 }
 
@@ -449,10 +460,18 @@ function recalcStatsFromCards() {
   const cards = document.querySelectorAll('.account-card');
   let totalCurrent = 0, totalTotal = 0;
   for (const card of cards) {
-    const c = parseInt(card.dataset.current) || 0;
-    const t = parseInt(card.dataset.total) || 0;
-    totalCurrent += c;
-    totalTotal += t;
+    const wrap = card.querySelector('[data-progress-phase="pc"]');
+    if (!wrap) continue;
+    const fill = wrap.querySelector('.account-progress-fill');
+    if (!fill) continue;
+    // Parse from label content
+    const label = card.querySelector('[data-progress-label="pc"]');
+    if (!label) continue;
+    const m = label.textContent.match(/(\d+)\/(\d+)/);
+    if (m) {
+      totalCurrent += parseInt(m[1]) || 0;
+      totalTotal += parseInt(m[2]) || 0;
+    }
   }
   const pct = totalTotal > 0 ? Math.round(totalCurrent / totalTotal * 100) : 0;
   document.getElementById('stat-progress').textContent = pct + '%';
@@ -660,9 +679,11 @@ function statusLabel(s) {
   return m[s] || s;
 }
 function fmtDuration(s) {
-  if (!s || s <= 0) return '-';
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
-  return h > 0 ? h + 'h' + m + 'm' : m > 0 ? m + 'm' : s + 's';
+  if (!s || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
 }
 function fmtTime(ts) {
   if (!ts) return '-';
