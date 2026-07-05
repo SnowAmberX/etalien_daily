@@ -446,10 +446,13 @@ def _claim_mobile_phase(
 
         video_bar = activity.get("video_bar", [])
         pending_before = len([t for t in video_bar if t.get("has_award") and not t.get("is_get")])
+        mobile_total = len([t for t in video_bar if t.get("has_award")])
+        mobile_current_before = mobile_total - pending_before
 
         if pending_before == 0:
             logger.info("[%s] 手机端广告已全部领取，退出", phone)
-            _report(progress_callback, phone, "mobile_done", "手机端广告已全部领取")
+            _report(progress_callback, phone, "mobile_done", "手机端广告已全部领取",
+                    current=mobile_current_before, total=mobile_total)
             break
 
         round_num += 1
@@ -458,7 +461,8 @@ def _claim_mobile_phase(
             phone, round_num, pending_before, stalled_rounds,
         )
         _report(progress_callback, phone, f"m_r{round_num}",
-                f"手机端第{round_num}轮 (pending={pending_before})")
+                f"手机端第{round_num}轮 (pending={pending_before})",
+                current=mobile_current_before, total=mobile_total)
 
         result = client.pc_ad_callback_backup(MOBILE_AD_ID, MOBILE_BUSINESS)
         is_verify = bool(result.get("is_verify", False))
@@ -504,7 +508,8 @@ def _claim_mobile_phase(
             )
             if stalled_rounds >= MAX_STALLED_ROUNDS:
                 _report(progress_callback, phone, "mobile_stalled",
-                        f"手机端连续{MAX_STALLED_ROUNDS}轮无进展，停止")
+                        f"手机端连续{MAX_STALLED_ROUNDS}轮无进展，停止",
+                        current=mobile_current_before, total=mobile_total)
                 logger.info("[%s] 手机端连续%d轮无进展，停止", phone, MAX_STALLED_ROUNDS)
                 break
 

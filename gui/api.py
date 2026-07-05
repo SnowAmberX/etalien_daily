@@ -490,6 +490,14 @@ def create_app() -> Flask:
         def _progress_callback(phone, step, detail, **extra):
             """将 service 的回调转为进度条目更新 + DB 事件记录。"""
             updates = {}
+            # 根据 step 判断 phase
+            if step.startswith("b") or step in ("config", "before", "after"):
+                updates["phase"] = "pc"
+            elif step.startswith("m_") or step.startswith("mobile"):
+                updates["phase"] = "mobile"
+            elif step.startswith("t_") or step.startswith("translate"):
+                updates["phase"] = "translate"
+
             if step == "done" or step == "after":
                 updates["status"] = "done"
             elif step == "already_done":
@@ -545,7 +553,8 @@ def create_app() -> Flask:
                     source="gui",
                     target=target,
                 )
-                # 用最终结果更新进度
+                # 用最终结果更新进度（保留 phase）
+                final_phase = target if target in ("pc", "mobile", "translate") else "pc"
                 for r in results:
                     claim_manager.update_progress_entry(r["phone"], {
                         "status": r["status"],
@@ -554,6 +563,7 @@ def create_app() -> Flask:
                         "current": r.get("claimed", 0),
                         "total": r.get("claimed", 0) + r.get("failed", 0),
                         "error": r.get("error_msg"),
+                        "phase": final_phase,
                     })
                 logger.info("领取任务完成 run_id=%s result_count=%d", run_id, len(results))
             except Exception as e:
