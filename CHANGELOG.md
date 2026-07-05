@@ -5,17 +5,35 @@ All notable changes to etalien-daily will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.2] - 2026-07-22
+## [1.3.0] - 2026-07-22
 
 ### Added
-- 翻译次数领取功能：`fetch_translate_product()` / `fetch_translate_ad_config()` 接口
-- 翻译次数显示在账号卡片（VIP 行追加「翻译: N次」）
-- 新增「翻译」领取按钮
-- `TranslateProductResponse` proto 消息
-- `proto_decode.py`：命令行 Protobuf 反序列化工具
+- 翻译次数领取完整功能：
+  - `fetch_translate_product()`（POST /v2/account/translate/product/list，Member proto）
+  - `fetch_translate_ad_config()`（POST /v2/account/translate/ad/config，PcAdConfigResponse，4 阶段共 15 广告）
+  - `_claim_translate_phase()`：配置驱动循环，基于 ad/config 的 watched/total 进度，`translate_max_rounds`（默认 20）、`translate_retry_limit`（默认 3）
+  - `_safe_parse_translate_count()`：安全解析 MessageToDict 返回的字符串 expire_time（兼容缺失/空/非法值）
+  - 翻译次数显示在账号卡片 VIP 行（「翻译: N次」，失败时「翻译: 查询失败」，0 次也显示）
+- 翻译常量：`TRANSLATE_AD_ID = "103579416"`、`TRANSLATE_BUSINESS = 3`
+- 新增「翻译」领取按钮，独立进度条 `data-progress-phase="translate"`
+- 进度条 phase 标识：PC/手机/翻译三种进度条均添加 `data-progress-phase` 和 `data-progress-label` 属性
+- `proto_decode.py`：命令行 Protobuf 反序列化工具，支持 hex/base64 输入
+- DB 设置项：`translate_max_rounds`（默认 20）、`translate_retry_limit`（默认 3）
+- 翻译领取每 3 天执行一次（`last_translate_claim` 字段）
 
 ### Changed
-- 翻译领取同样每 3 天执行一次（`last_translate_claim` 字段）
+- `updateCardProgress(phone, phase, current, total)`：使用属性选择器精确定位对应 phase 的进度条，保留前缀（PC / 手机 / 翻译）
+- 后端 `_progress_callback` 根据 step 前缀自动检测 phase：`b`/`config` → pc，`m_`/`mobile` → mobile，`t_`/`translate` → translate
+- 顶部统计 `recalcStatsFromCards()` 仅按 `data-progress-phase="pc"` 聚合，不再混入手机/翻译数据
+- 最终结果更新根据领取 `target` 设置正确的 phase
+- 移动端 `_report` 调用新增 `current`/`total` 参数
+
+### Removed
+- 废弃 `TranslateProductResponse` proto（已被 Member 替代，proto 定义保留）
+
+### Fixed
+- 修复领取时进度条更新到错误 phase（`querySelector` 始终命中第一个 PC 进度条，手机领取也受影响）
+- 修复 `_claim_business_phase` 中误放的 `translate_retry_limit` 常量和日志
 
 ## [1.2.1] - 2026-07-22
 
