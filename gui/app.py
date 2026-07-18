@@ -229,7 +229,7 @@ def main() -> None:
         resizable=True,
         frameless=True,
         easy_drag=False,
-        background_color="#0b0b0d",
+        background_color="#e9ebf1",
     )
 
     # 暴露窗口 API

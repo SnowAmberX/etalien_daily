@@ -5,6 +5,22 @@ All notable changes to etalien-daily will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-07-18
+
+### Changed
+- UI 全面升级为液态玻璃风格浅色主题：
+  - 背景改为浅色底 + 四色 ambient 光斑固定背景（液态玻璃折射基底）
+  - 统一玻璃材质：渐变半透明 + `backdrop-filter: blur + saturate` + 边缘高光内阴影（顶部亮边 / 底部暗边）
+  - 所有按钮改为透明液态玻璃胶囊：hover 变亮浮起、按压 `scale(0.97)` 下沉
+  - 窗口控制按钮改为圆形玻璃按钮；卡片、模态框、Toast、进度条、登录分段控件、滚动条统一玻璃语言
+- Toggle 滑块改为扁平圆形透明玻璃板：半透明 + 玻璃边缘亮线 + 扁平投影，透出轨道颜色；保留点击/拖拽放大（`scale(1.18)`）交互
+- 窗口启动底色 `#0b0b0d` → `#e9ebf1`，匹配浅色主题
+
+### Fixed
+- 修复 Toggle 滑块点击/拖拽放大时垂直偏下：定位改为上下等距结构性居中，并移除滑块 `backdrop-filter`（Chromium 中 `backdrop-filter` 与 `transform: scale` 叠加存在合成层位置偏移 bug）
+- 修复历史记录弹窗引用失效的 CSS 变量（`--sage`/`--ember`/`--amber` → `--green`/`--red`/`--accent`）
+- 修复 `#app` 未声明 flex 布局导致主区域高度异常
+
 ## [1.3.0] - 2026-07-22
 
 ### Added
