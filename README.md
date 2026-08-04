@@ -44,8 +44,12 @@ flutter run -d windows
 # GUI 程序（产物在 build/windows/x64/runner/Release/）
 flutter build windows
 
-# 无头领取程序
-dart compile exe bin/headless.dart -o build/headless/etalien_headless.exe
+# 无头领取程序（sqlite3 含原生库，须使用 dart build cli）
+dart build cli -o build/headless -t bin/headless.dart
+# 产物在 build/headless/bundle/（bin/headless.exe + lib/sqlite3.dll）
+# 发布时与 GUI 程序放在同一目录：
+#   bin/headless.exe → <程序目录>/bin/etalien_headless.exe
+#   lib/sqlite3.dll  → <程序目录>/lib/sqlite3.dll
 ```
 
 ## 无头模式
