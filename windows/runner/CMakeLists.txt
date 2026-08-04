@@ -43,3 +43,25 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# 本地构建自动集成无头程序（开发免手动复制）。
+# CI（GitHub Actions）由 GITHUB_ACTIONS 环境变量检测并跳过，
+# release 产物由 .github/workflows/release.yml 显式构建与组装。
+# 流程：dart build cli 构建 headless bundle → 复制到输出目录标准布局
+# （bin\etalien_headless.exe + lib\sqlite3.dll）。
+if(NOT DEFINED ENV{GITHUB_ACTIONS})
+  add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+    # Windows 上 dart 是 dart.bat，批处理中必须 call，否则执行后不返回
+    COMMAND call dart build cli -o "${CMAKE_SOURCE_DIR}/../build/headless" -t bin/headless.dart
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${BINARY_NAME}>/bin"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${BINARY_NAME}>/lib"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/../build/headless/bundle/bin/headless.exe"
+            "$<TARGET_FILE_DIR:${BINARY_NAME}>/bin/etalien_headless.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/../build/headless/bundle/lib/sqlite3.dll"
+            "$<TARGET_FILE_DIR:${BINARY_NAME}>/lib/sqlite3.dll"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
+    COMMENT "Building and bundling headless CLI"
+  )
+endif()
