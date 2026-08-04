@@ -20,11 +20,14 @@ class EfTitleBar extends StatelessWidget {
         children: [
           // 拖拽区 + 产品标识
           Expanded(
-            child: DragToMoveArea(
+            child: EfDragArea(
+              height: height,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 child: Row(
                   children: [
+                    const _DragGrip(),
+                    const SizedBox(width: 12),
                     Container(width: 10, height: 10, color: Ef.signal),
                     const SizedBox(width: 10),
                     Text(
@@ -78,6 +81,54 @@ class EfTitleBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 可拖拽区域：move 光标；拖拽与双击最大化由 [DragToMoveArea] 提供。
+class EfDragArea extends StatelessWidget {
+  const EfDragArea({super.key, required this.child, this.height});
+
+  final Widget child;
+  final double? height;
+
+  @override
+  Widget build(BuildContext context) {
+    return DragToMoveArea(
+      child: SizedBox(
+        height: height,
+        child: child,
+      ),
+    );
+  }
+}
+
+/// 3×2 六点拖拽把手（endfield field-code 提示）。
+class _DragGrip extends StatelessWidget {
+  const _DragGrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var r = 0; r < 2; r++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 1.5),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var c = 0; c < 3; c++)
+                  Container(
+                    width: 3,
+                    height: 3,
+                    margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                    color: Ef.signal.withValues(alpha: 0.7),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

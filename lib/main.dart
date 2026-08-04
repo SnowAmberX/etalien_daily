@@ -32,6 +32,8 @@ Future<void> main() async {
       title: '免广告领时长',
     );
     await windowManager.waitUntilReadyToShow(options, () async {
+      // 去除系统边框（TitleBarStyle.hidden 仍保留的非客户区白色细边框）
+      await windowManager.setAsFrameless();
       await windowManager.show();
       await windowManager.focus();
     });

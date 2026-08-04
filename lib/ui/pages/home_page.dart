@@ -62,17 +62,20 @@ class _StatsDock extends StatelessWidget {
           height: 44,
           color: Ef.ink,
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(
-            children: [
-              _stat('ACCOUNTS', accountsStore.totalCount),
-              _divider(),
-              _stat('ENABLED', accountsStore.enabledCount),
-              _divider(),
-              _stat('PROGRESS', accountsStore.overallProgress, suffix: '%'),
-              const Spacer(),
-              if (accountsStore.refreshing)
-                Text('SYNCING…', style: Ef.micro(color: Ef.signal, size: 9)),
-            ],
+          child: EfDragArea(
+            height: 44,
+            child: Row(
+              children: [
+                _stat('ACCOUNTS', accountsStore.totalCount),
+                _divider(),
+                _stat('ENABLED', accountsStore.enabledCount),
+                _divider(),
+                _stat('PROGRESS', accountsStore.overallProgress, suffix: '%'),
+                const Spacer(),
+                if (accountsStore.refreshing)
+                  Text('SYNCING…', style: Ef.micro(color: Ef.signal, size: 9)),
+              ],
+            ),
           ),
         );
       },
