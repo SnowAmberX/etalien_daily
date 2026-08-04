@@ -141,6 +141,10 @@ Future<Database> initDb({String? dbPath}) async {
   await _ensureColumn(db, 'accounts', "password TEXT DEFAULT ''");
   await _ensureColumn(db, 'accounts', 'last_mobile_claim REAL DEFAULT 0');
   await _ensureColumn(db, 'accounts', 'last_translate_claim REAL DEFAULT 0');
+  // 幂等迁移（2026-08-04 风控更新）：旧版补发间隔键 request_interval 已废弃，
+  // 统一迁移为 backup_request_interval=10.0，无论旧值是多少都重置为 10 秒，
+  // 避免触发 24h×7 补发接口风控。
+  await db.delete('settings', where: 'key = ?', whereArgs: ['request_interval']);
   // 回填旧数据的 week_start（粗略用当前周）
   await db.rawUpdate(
     'UPDATE claim_history SET week_start = ? WHERE week_start IS NULL OR week_start = 0',
@@ -418,7 +422,7 @@ Future<bool> deleteAccount(String phone, {String? dbPath}) async {
 
 const _defaultSettings = {
   'max_concurrent': '10',
-  'request_interval': '1.0',
+  'backup_request_interval': '10.0',
   'max_rounds': '21',
   'mobile_max_rounds': '21',
   'translate_retry_limit': '3',
@@ -442,7 +446,7 @@ double _clampDouble(Object? v, double min, double max) {
 class Settings {
   Settings({
     this.maxConcurrent = 10,
-    this.requestInterval = 1.0,
+    this.backupRequestInterval = 10.0,
     this.maxRounds = 21,
     this.mobileMaxRounds = 21,
     this.translateRetryLimit = 3,
@@ -453,7 +457,7 @@ class Settings {
   });
 
   int maxConcurrent;
-  double requestInterval;
+  double backupRequestInterval;
   int maxRounds;
   int mobileMaxRounds;
   int translateRetryLimit;
@@ -475,7 +479,8 @@ Future<Settings> getSettings({String? dbPath}) async {
   }
   return Settings(
     maxConcurrent: _clampInt(raw['max_concurrent'], 1, 50),
-    requestInterval: _clampDouble(raw['request_interval'], 0.1, 30.0),
+    backupRequestInterval:
+        _clampDouble(raw['backup_request_interval'], 0.01, 30.0),
     maxRounds: _clampInt(raw['max_rounds'], 1, 200),
     mobileMaxRounds: _clampInt(raw['mobile_max_rounds'], 1, 200),
     translateRetryLimit: _clampInt(raw['translate_retry_limit'], 1, 100),
@@ -489,7 +494,7 @@ Future<Settings> getSettings({String? dbPath}) async {
 /// 更新设置（部分更新），自动验证范围。
 Future<bool> updateSettings({
   int? maxConcurrent,
-  double? requestInterval,
+  double? backupRequestInterval,
   int? maxRounds,
   int? mobileMaxRounds,
   int? translateRetryLimit,
@@ -504,9 +509,9 @@ Future<bool> updateSettings({
     updates['max_concurrent'] =
         _clampInt(maxConcurrent, 1, 50).toString();
   }
-  if (requestInterval != null) {
-    updates['request_interval'] =
-        _clampDouble(requestInterval, 0.1, 30.0).toString();
+  if (backupRequestInterval != null) {
+    updates['backup_request_interval'] =
+        _clampDouble(backupRequestInterval, 0.01, 30.0).toString();
   }
   if (maxRounds != null) {
     updates['max_rounds'] = _clampInt(maxRounds, 1, 200).toString();

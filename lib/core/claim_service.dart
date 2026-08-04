@@ -381,7 +381,7 @@ Future<ClaimResult> claimForAccount(
 /// 1. fetchPcAdConfig() → 统计全局 unwatchedBefore
 /// 2. unwatchedBefore == 0 → 全部完成，退出
 /// 3. pcAdCallbackBackup(AD_ID, business) → 仅用 business 作为请求参数
-/// 4. sleep(requestInterval)
+/// 4. sleep(backupRequestInterval)
 /// 5. 再次 fetchPcAdConfig() → 统计 unwatchedAfter
 /// 6. unwatchedAfter < unwatchedBefore → 有进展，重置 stalledRounds
 /// 7. 连续 kMaxStalledRounds 轮无进展 → 退出（防死循环）
@@ -396,8 +396,8 @@ Future<(int, int)> _claimBusinessPhase(
   var failed = 0;
   var stalledRounds = 0;
   var roundNum = 0;
-  final requestInterval =
-      Duration(milliseconds: (settings.requestInterval * 1000).round());
+  final backupRequestInterval =
+      Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final maxRounds = settings.maxRounds;
 
   while (roundNum < maxRounds) {
@@ -453,7 +453,7 @@ Future<(int, int)> _claimBusinessPhase(
     }
 
     // 等待间隔
-    await Future<void>.delayed(requestInterval);
+    await Future<void>.delayed(backupRequestInterval);
 
     // 再查任务 → 比较全局未观看数量变化
     final config2 = await client.fetchPcAdConfig();
@@ -500,8 +500,8 @@ Future<(int, int)> _claimMobilePhase(
   var failed = 0;
   var stalledRounds = 0;
   var roundNum = 0;
-  final requestInterval =
-      Duration(milliseconds: (settings.requestInterval * 1000).round());
+  final backupRequestInterval =
+      Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final mobileMaxRounds = settings.mobileMaxRounds;
 
   int countPending(AdActivityResponse activity) => activity.videoBar
@@ -573,7 +573,7 @@ Future<(int, int)> _claimMobilePhase(
       failed += 1;
     }
 
-    await Future<void>.delayed(requestInterval);
+    await Future<void>.delayed(backupRequestInterval);
 
     // 再查手机端任务
     final activity2 = await client.fetchMobileAdActivity();
@@ -623,8 +623,8 @@ Future<(int, int)> _claimTranslatePhase(
   var failed = 0;
   var stalledRounds = 0;
   var roundNum = 0;
-  final requestInterval =
-      Duration(milliseconds: (settings.requestInterval * 1000).round());
+  final backupRequestInterval =
+      Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final translateMaxRounds = max(1, settings.translateMaxRounds);
   final translateRetryLimit = max(1, settings.translateRetryLimit);
 
@@ -692,7 +692,7 @@ Future<(int, int)> _claimTranslatePhase(
       failed += 1;
     }
 
-    await Future<void>.delayed(requestInterval);
+    await Future<void>.delayed(backupRequestInterval);
 
     // 3. 再次查询配置 → 比较进度变化
     final config2 = await client.fetchTranslateAdConfig();
@@ -732,10 +732,10 @@ Future<(int, int)> _claimTranslatePhase(
 
   // 最终校验：打印翻译次数
   try {
-    final product = await client.fetchTranslateProduct();
+    final product = await client.fetchTranslateCount();
     if (!product.isError && product.data != null) {
-      _log('[$phone] translate final '
-          'translate_count=${max(0, product.data!.expireTime.toInt())}');
+      _log(
+          '[$phone] translate final translate_count=${max(0, product.data!)}');
     }
   } catch (_) {}
 

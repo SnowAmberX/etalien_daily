@@ -28,7 +28,8 @@ class _SettingsForm extends StatefulWidget {
 
 class _SettingsFormState extends State<_SettingsForm> {
   final _maxConcurrent = TextEditingController();
-  final _requestInterval = TextEditingController();
+  final _backupRequestInterval = TextEditingController();
+  final _intervalFocus = FocusNode();
   final _maxRounds = TextEditingController();
   final _mobileMaxRounds = TextEditingController();
   final _translateRetryLimit = TextEditingController();
@@ -44,13 +45,28 @@ class _SettingsFormState extends State<_SettingsForm> {
   @override
   void initState() {
     super.initState();
+    // 补发接口间隔 < 8s 时失焦弹窗提示（仅提示，不阻止保存）。
+    _intervalFocus.addListener(() {
+      if (_intervalFocus.hasFocus || !mounted) return;
+      // 弹窗关闭过程中的失焦不触发提示
+      if (ModalRoute.of(context)?.isCurrent != true) return;
+      final v = double.tryParse(_backupRequestInterval.text);
+      if (v != null && v < 8) {
+        showEfInfo(
+          context,
+          '请求间隔低于 8s，可能触发服务器的 24h×7 风控。',
+          title: '补发接口风控提示',
+          en: 'RISK',
+        );
+      }
+    });
     _load();
   }
 
   Future<void> _load() async {
     final s = await getSettings();
     _maxConcurrent.text = '${s.maxConcurrent}';
-    _requestInterval.text = '${s.requestInterval}';
+    _backupRequestInterval.text = '${s.backupRequestInterval}';
     _maxRounds.text = '${s.maxRounds}';
     _mobileMaxRounds.text = '${s.mobileMaxRounds}';
     _translateRetryLimit.text = '${s.translateRetryLimit}';
@@ -71,7 +87,7 @@ class _SettingsFormState extends State<_SettingsForm> {
   void dispose() {
     for (final c in [
       _maxConcurrent,
-      _requestInterval,
+      _backupRequestInterval,
       _maxRounds,
       _mobileMaxRounds,
       _translateRetryLimit,
@@ -80,6 +96,7 @@ class _SettingsFormState extends State<_SettingsForm> {
     ]) {
       c.dispose();
     }
+    _intervalFocus.dispose();
     super.dispose();
   }
 
@@ -100,7 +117,14 @@ class _SettingsFormState extends State<_SettingsForm> {
           children: [
             Expanded(child: _numField('并发数', _maxConcurrent, '1-50')),
             const SizedBox(width: 10),
-            Expanded(child: _numField('请求间隔(s)', _requestInterval, '0.1-30')),
+            Expanded(
+              child: _numField(
+                '补发接口请求间隔（秒）',
+                _backupRequestInterval,
+                '0.01-30',
+                focusNode: _intervalFocus,
+              ),
+            ),
           ],
         ),
         Row(
@@ -171,7 +195,8 @@ class _SettingsFormState extends State<_SettingsForm> {
   }
 
   Widget _numField(
-      String label, TextEditingController ctrl, String hint) {
+      String label, TextEditingController ctrl, String hint,
+      {FocusNode? focusNode}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(
@@ -179,7 +204,7 @@ class _SettingsFormState extends State<_SettingsForm> {
         children: [
           Text(label, style: Ef.micro(size: 9)),
           const SizedBox(height: 4),
-          _input(ctrl, hint: hint),
+          _input(ctrl, hint: hint, focusNode: focusNode),
         ],
       ),
     );
@@ -303,7 +328,8 @@ class _SettingsFormState extends State<_SettingsForm> {
     );
   }
 
-  Widget _input(TextEditingController ctrl, {String? hint}) {
+  Widget _input(TextEditingController ctrl,
+      {String? hint, FocusNode? focusNode}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.6),
@@ -311,6 +337,7 @@ class _SettingsFormState extends State<_SettingsForm> {
       ),
       child: TextField(
         controller: ctrl,
+        focusNode: focusNode,
         style: Ef.num(size: 13),
         decoration: InputDecoration(
           hintText: hint,
@@ -329,7 +356,7 @@ class _SettingsFormState extends State<_SettingsForm> {
     try {
       await updateSettings(
         maxConcurrent: int.tryParse(_maxConcurrent.text),
-        requestInterval: double.tryParse(_requestInterval.text),
+        backupRequestInterval: double.tryParse(_backupRequestInterval.text),
         maxRounds: int.tryParse(_maxRounds.text),
         mobileMaxRounds: int.tryParse(_mobileMaxRounds.text),
         translateRetryLimit: int.tryParse(_translateRetryLimit.text),

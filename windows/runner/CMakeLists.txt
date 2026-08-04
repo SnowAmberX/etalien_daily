@@ -21,6 +21,10 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# 源文件包含 UTF-8 中文注释；MSVC 默认代码页可能为 GBK，会报 C4819
+# （且模板开启 /WX 视为错误）。强制按 UTF-8 解析源文件。
+target_compile_options(${BINARY_NAME} PRIVATE "/utf-8")
+
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")

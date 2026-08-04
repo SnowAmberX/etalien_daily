@@ -231,3 +231,37 @@ Future<bool> showEfConfirm(
   );
   return result ?? false;
 }
+
+/// 信息提示弹窗（单按钮）。点击后关闭。
+Future<void> showEfInfo(
+  BuildContext context,
+  String message, {
+  String title = '提示',
+  String en = 'INFO',
+  String okLabel = '知道了',
+}) async {
+  await showEfDialog<void>(
+    context,
+    title: title,
+    en: en,
+    width: 320,
+    child: Builder(
+      builder: (ctx) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: Ef.body(size: 13)),
+          EfDialogActions(
+            children: [
+              EfButton(
+                label: okLabel,
+                primary: true,
+                compact: true,
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}

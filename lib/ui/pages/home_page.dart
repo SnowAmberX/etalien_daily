@@ -236,7 +236,8 @@ class _AccountsSection extends StatelessWidget {
               );
             }
             return SizedBox(
-              height: 172,
+              // 账号卡片内容（时长块 + 三行进度）需要约 188px，172 会导致底部溢出
+              height: 188,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: accountsStore.accounts.length,

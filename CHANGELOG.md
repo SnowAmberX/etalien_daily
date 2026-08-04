@@ -5,6 +5,16 @@ All notable changes to etalien-daily will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- 2026-08-04 补发接口风控更新：间隔设置 `request_interval` 重命名为 `backup_request_interval`，默认值由 1.0s 改为 10.0s，允许范围调整为 0.01-30s
+- 旧数据库升级时自动把补发间隔重置为 10.0s（幂等迁移，仅重置一次，不覆盖用户之后的自定义值）
+- 设置弹窗新增补发接口风控提示：间隔低于 8s 失焦时弹窗提示（仅提示，不阻止保存）；字段标签与范围提示同步更新
+
+### Fixed
+- 避免低间隔触发服务端 24h×7 补发接口风控
+
 ## [1.3.1] - 2026-07-18
 
 ### Changed

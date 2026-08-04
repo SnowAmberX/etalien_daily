@@ -48,7 +48,7 @@ void main() {
     test('default settings', () async {
       final s = await getSettings();
       expect(s.maxConcurrent, 10);
-      expect(s.requestInterval, 1.0);
+      expect(s.backupRequestInterval, 10.0);
       expect(s.maxRounds, 21);
       expect(s.scheduleTime, '08:00');
     });
@@ -157,10 +157,10 @@ void main() {
 
   group('settings CRUD', () {
     test('update settings', () async {
-      await updateSettings(maxConcurrent: 5, requestInterval: 2.5);
+      await updateSettings(maxConcurrent: 5, backupRequestInterval: 2.5);
       final s = await getSettings();
       expect(s.maxConcurrent, 5);
-      expect(s.requestInterval, 2.5);
+      expect(s.backupRequestInterval, 2.5);
     });
 
     test('update settings clamp', () async {
@@ -170,8 +170,28 @@ void main() {
       await updateSettings(maxConcurrent: 0); // 低于下限 1
       expect((await getSettings()).maxConcurrent, 1);
 
-      await updateSettings(requestInterval: 0.0); // 低于下限 0.1
-      expect((await getSettings()).requestInterval, 0.1);
+      await updateSettings(backupRequestInterval: 0.0); // 低于下限 0.01
+      expect((await getSettings()).backupRequestInterval, 0.01);
+    });
+
+    test('migrate legacy interval to 10s', () async {
+      final db = await getDb();
+      await db.rawInsert(
+          "INSERT OR REPLACE INTO settings (key, value) VALUES ('request_interval', '1.0')");
+      await initDb(); // 再次初始化触发迁移
+      final s = await getSettings();
+      expect(s.backupRequestInterval, 10.0);
+      final rows = await (await getDb()).rawQuery(
+          "SELECT COUNT(*) AS c FROM settings WHERE key = 'request_interval'");
+      expect(rows.first['c'], 0);
+    });
+
+    test('interval migration preserves custom value', () async {
+      final db = await getDb();
+      await db.rawInsert(
+          "INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_request_interval', '15.0')");
+      await initDb();
+      expect((await getSettings()).backupRequestInterval, 15.0);
     });
 
     test('update settings partial', () async {
@@ -179,7 +199,7 @@ void main() {
       await updateSettings(maxConcurrent: 8);
       final after = await getSettings();
       expect(after.maxConcurrent, 8);
-      expect(after.requestInterval, before.requestInterval);
+      expect(after.backupRequestInterval, before.backupRequestInterval);
     });
   });
 

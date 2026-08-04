@@ -14,15 +14,84 @@ import 'dart:io';
 
 import 'package:fixnum/fixnum.dart' show Int64;
 import 'package:http/http.dart' as http;
-import 'package:protobuf/protobuf.dart';
 
 import 'proto/account.pb.dart';
 import 'proto/apiv2.pb.dart';
 import 'proto/error.pb.dart' as error_pb;
 import 'sign.dart';
 
+/// 标准化手机号：11 位国内号码自动加 +86 前缀（服务端要求 13 位）。
+String normalizePhone(String phone) {
+  final p = phone.trim();
+  if (!p.startsWith('+') && p.length == 11 && RegExp(r'^\d+$').hasMatch(p)) {
+    return '+86$p';
+  }
+  return p;
+}
+
+/// 解析翻译产品列表响应中的当前可用翻译次数。
+///
+/// 服务端实际返回（2026-08-04 实测）：
+///   message TranslateProductListResponse {
+///     repeated TranslateProductItem list = 1; // 产品目录
+///     int64 expire_time = 2;                  // 当前可用翻译次数
+///   }
+/// Dart protobuf 对 wire 类型不符会抛异常，这里手动跳过未知字段，
+/// 只读取顶层 field 2 的 varint。
+int? parseTranslateCount(List<int> bytes) {
+  var i = 0;
+  while (i < bytes.length) {
+    final tag = _readVarint(bytes, i);
+    if (tag == null) return null;
+    i = tag.$2;
+    final field = tag.$1 >> 3;
+    final wire = tag.$1 & 7;
+    if (field == 2 && wire == 0) {
+      return _readVarint(bytes, i)?.$1;
+    }
+    final next = _skipWireField(bytes, i, wire);
+    if (next == null) return null;
+    i = next;
+  }
+  return null;
+}
+
+/// 读取 protobuf varint，返回 (值, 下一字节下标)；数据截断返回 null。
+(int, int)? _readVarint(List<int> bytes, int start) {
+  var value = 0;
+  var shift = 0;
+  var i = start;
+  while (i < bytes.length && shift < 64) {
+    final b = bytes[i++];
+    value |= (b & 0x7F) << shift;
+    if ((b & 0x80) == 0) return (value, i);
+    shift += 7;
+  }
+  return null;
+}
+
+/// 跳过指定 wire type 的字段，返回下一字段下标；非法输入返回 null。
+int? _skipWireField(List<int> bytes, int start, int wire) {
+  switch (wire) {
+    case 0: // varint
+      return _readVarint(bytes, start)?.$2;
+    case 1: // fixed64
+      if (start + 8 > bytes.length) return null;
+      return start + 8;
+    case 2: // length-delimited
+      final len = _readVarint(bytes, start);
+      if (len == null || len.$2 + len.$1 > bytes.length) return null;
+      return len.$2 + len.$1;
+    case 5: // fixed32
+      if (start + 4 > bytes.length) return null;
+      return start + 4;
+    default:
+      return null; // groups(3/4) 或非法 wire type
+  }
+}
+
 /// 统一 API 返回结果。
-class ApiResult<T extends GeneratedMessage> {
+class ApiResult<T> {
   ApiResult.ok(this.data)
       : isError = false,
         code = null,
@@ -99,7 +168,8 @@ class ApiClient {
   Future<ApiResult<GetLoginVerificationCodeResponse>> getVerificationCode(
     String phoneNumber,
   ) {
-    final req = GetLoginVerificationCodeRequest(phoneNumber: phoneNumber);
+    final req =
+        GetLoginVerificationCodeRequest(phoneNumber: normalizePhone(phoneNumber));
     return _retryRequest<GetLoginVerificationCodeResponse>(
       method: 'GET',
       path: '/account/v1/get_login_verification_code',
@@ -115,7 +185,7 @@ class ApiClient {
     String verificationCode,
   ) async {
     final req = LoginRequest(
-      phoneNumber: phoneNumber,
+      phoneNumber: normalizePhone(phoneNumber),
       verificationCode: verificationCode,
     );
     final result = await _retryRequest<LoginResponse>(
@@ -136,7 +206,8 @@ class ApiClient {
     String phoneNumber,
     String password,
   ) async {
-    final req = LoginV2Request(phoneNumber: phoneNumber, password: password);
+    final req =
+        LoginV2Request(phoneNumber: normalizePhone(phoneNumber), password: password);
     final result = await _retryRequest<LoginV2Response>(
       method: 'POST',
       path: '/v2/account/login',
@@ -210,15 +281,20 @@ class ApiClient {
     );
   }
 
-  /// 获取翻译次数。
+  /// 获取当前可用翻译次数。
   ///
-  /// 响应使用 Member 结构（type=1, expire_time=2），
-  /// expire_time 实际表示当前可用翻译次数。
-  Future<ApiResult<Member>> fetchTranslateProduct() {
-    return _retryRequest<Member>(
+  /// 响应为产品目录 + 顶层 field 2（varint）= 当前可用翻译次数。
+  Future<ApiResult<int>> fetchTranslateCount() {
+    return _retryRequest<int>(
       method: 'POST',
       path: '/v2/account/translate/product/list',
-      parseResponse: Member.fromBuffer,
+      parseResponse: (bytes) {
+        final count = parseTranslateCount(bytes);
+        if (count == null) {
+          throw const FormatException('translate product response malformed');
+        }
+        return count;
+      },
     );
   }
 
@@ -236,7 +312,7 @@ class ApiClient {
   /// 带重试的请求包装。
   ///
   /// 重试条件: 网络错误 / HTTP 5xx。不重试: HTTP 4xx（含认证错误）。
-  Future<ApiResult<T>> _retryRequest<T extends GeneratedMessage>({
+  Future<ApiResult<T>> _retryRequest<T>({
     required String method,
     required String path,
     List<int>? bodyData,
@@ -264,7 +340,7 @@ class ApiClient {
   }
 
   /// 核心请求方法：签名 URL → 发送 → 解析响应。
-  Future<ApiResult<T>> _request<T extends GeneratedMessage>({
+  Future<ApiResult<T>> _request<T>({
     required String method,
     required String path,
     List<int>? bodyData,
@@ -301,7 +377,7 @@ class ApiClient {
   /// - HTTP >= 400: 反序列化 error.Error
   /// - HTTP 200 + 空 body: ok(data: null)
   /// - HTTP 200: 反序列化 protobuf
-  ApiResult<T> _parseResponse<T extends GeneratedMessage>(
+  ApiResult<T> _parseResponse<T>(
     http.Response resp,
     T Function(List<int>) parseResponse,
   ) {

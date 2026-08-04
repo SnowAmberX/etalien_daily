@@ -175,9 +175,9 @@ class AccountsStore extends ChangeNotifier {
           ..translateCurrent = tw
           ..translateTotal = tt;
       }
-      final product = await client.fetchTranslateProduct();
+      final product = await client.fetchTranslateCount();
       if (!product.isError && product.data != null) {
-        s.translateCount = max(0, product.data!.expireTime.toInt());
+        s.translateCount = max(0, product.data!);
       } else {
         s.translateError = true;
       }
