@@ -9,9 +9,7 @@
 
 namespace {
 
-// TODO(release): 测试期使用 EtAlienDailyTest 避免与 v1 生产服务冲突，
-// 正式发布前改回 EtAlienDaily。
-constexpr wchar_t kServiceName[] = L"EtAlienDailyTest";
+constexpr wchar_t kServiceName[] = L"EtAlienDaily";
 
 // headless 程序位于 exe 同级 bin\ 子目录（dart build cli bundle 结构：
 // bin\etalien_headless.exe + lib\sqlite3.dll，dll 按 exe 相对路径 ..\lib 解析）。
