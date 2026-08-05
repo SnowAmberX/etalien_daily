@@ -665,7 +665,7 @@ async function showHistory() {
     else {
       c.innerHTML = records.slice(0, 50).map(h => {
         const g = h.gained || 0;
-        return '<div class="history-item"><span class="history-time">' + fmtTime(h.time) + '</span><span>' + escapeHtml(h.phone) + '</span><span class="history-status" style="color:' + (h.status === 'ok' || h.status === 'done' || h.status === 'all_done' ? 'var(--sage)' : 'var(--ember)') + '">' + statusLabel(h.status) + '</span><span class="spacer"></span><span style="color:var(--amber)">+' + fmtDuration(Math.max(0, g)) + '</span></div>';
+        return '<div class="history-item"><span class="history-time">' + fmtTime(h.time) + '</span><span>' + escapeHtml(h.phone) + '</span><span class="history-status" style="color:' + (h.status === 'ok' || h.status === 'done' || h.status === 'all_done' ? 'var(--green)' : 'var(--red)') + '">' + statusLabel(h.status) + '</span><span class="spacer"></span><span style="color:var(--accent)">+' + fmtDuration(Math.max(0, g)) + '</span></div>';
       }).join('');
     }
     showModal('dlg-history');
@@ -730,7 +730,7 @@ function _tgOnDown(e) {
 function _tgOnMove(e) {
   if (!_tgSlider) return;
   const dx = e.clientX - _tgStartX;
-  const clamped = Math.max(0, Math.min(20, _tgChecked ? 20 + dx : dx));
+  const clamped = Math.max(0, Math.min(16, _tgChecked ? 16 + dx : dx));
   _tgSlider.style.setProperty('--thumb-x', clamped + 'px');
 }
 

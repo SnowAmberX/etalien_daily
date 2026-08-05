@@ -29,3 +29,17 @@ config
 # agent
 AGENTS.md
 .reasonix
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.metadata
+*.iml
+.idea/
+
+# Flutter Windows generated
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake

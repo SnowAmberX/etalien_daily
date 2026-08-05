@@ -5,6 +5,31 @@ All notable changes to etalien-daily will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-05
+
+### Added
+- Flutter 全面重构：v2 使用 Flutter / Dart 重写 Windows 桌面客户端，保留 SQLite 数据，新增独立无头领取程序
+- 账号级领取范围：每个账号可单独勾选 PC / 手机 / 翻译，支持单账号保存、应用到所有账号、多选批量配置
+- 账号卡片点击 3D 翻转，背面配置当前账号领取范围；多选模式支持全选 / 反选
+- 回调请求间隔增加 ±1 秒随机浮动，默认 10 秒在 9 到 11 秒之间随机等待
+- 新增 `skipped` 领取状态：账号未配置匹配范围时跳过，且不写入领取历史
+
+### Changed
+- GUI 与 headless 统一使用程序根目录 `config/etalien.db`，避免定时任务读取到空数据库
+- schtasks 定时任务改为 `SYSTEM` + 最高权限非交互运行，用户未登录也会领取；创建/覆盖任务需要管理员权限
+- 自动领取按钮改为“按配置领取”，`仅 PC / 仅手机 / 翻译` 快捷按钮按账号配置过滤
+- headless `--target all` 改为按账号勾选范围执行
+- 2026-08-04 补发接口风控更新：间隔设置 `request_interval` 重命名为 `backup_request_interval`，默认值由 1.0s 改为 10.0s，允许范围调整为 0.01-30s
+- 旧数据库升级时自动把补发间隔重置为 10.0s（幂等迁移，仅重置一次，不覆盖用户之后的自定义值）
+- 设置弹窗新增补发接口风控提示：间隔低于 8s 失焦时弹窗提示（仅提示，不阻止保存）；字段标签与范围提示同步更新
+- UI 按 Endfield 设计语言重构：白色操作台、炭黑工具 dock、信号黄状态楔形、1px 分隔线、方形 / 2px 圆角组件
+
+### Fixed
+- 避免低间隔触发服务端 24h×7 补发接口风控
+- 修复 GUI 与 headless 数据库不一致导致定时任务“没有启用的账号”
+- 修复账号卡片背面内容溢出
+- 修复卡片从背面翻回正面时不播放动画
+
 ## [1.3.0] - 2026-07-22
 
 ### Added
