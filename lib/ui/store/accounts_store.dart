@@ -219,4 +219,63 @@ class AccountsStore extends ChangeNotifier {
     await updateAccount(phone, enabled: enabled);
     await load();
   }
+
+  Future<void> saveScope(
+    String phone, {
+    required bool pc,
+    required bool mobile,
+    required bool translate,
+  }) async {
+    await updateAccount(
+      phone,
+      claimPc: pc,
+      claimMobile: mobile,
+      claimTranslate: translate,
+    );
+    final status = accounts.where((a) => a.phone == phone).firstOrNull;
+    if (status != null) {
+      status.account
+        ..claimPc = pc
+        ..claimMobile = mobile
+        ..claimTranslate = translate;
+    }
+    notifyListeners();
+  }
+
+  Future<void> saveScopeForPhones(
+    Iterable<String> phones, {
+    required bool pc,
+    required bool mobile,
+    required bool translate,
+  }) async {
+    final list = phones.toList();
+    if (list.isEmpty) return;
+    await updateAccountsClaimScope(
+      list,
+      pc: pc,
+      mobile: mobile,
+      translate: translate,
+    );
+    for (final status in accounts) {
+      if (!list.contains(status.phone)) continue;
+      status.account
+        ..claimPc = pc
+        ..claimMobile = mobile
+        ..claimTranslate = translate;
+    }
+    notifyListeners();
+  }
+
+  Future<void> applyScopeToAll({
+    required bool pc,
+    required bool mobile,
+    required bool translate,
+  }) {
+    return saveScopeForPhones(
+      accounts.map((a) => a.phone),
+      pc: pc,
+      mobile: mobile,
+      translate: translate,
+    );
+  }
 }

@@ -91,9 +91,56 @@ void main() {
       expect(acc.phone, '13800138000');
       expect(acc.name, '测试账号');
       expect(acc.enabled, isTrue);
+      expect(acc.claimPc, isTrue);
+      expect(acc.claimMobile, isTrue);
+      expect(acc.claimTranslate, isFalse);
       expect(acc.deviceId.length, 25);
       expect(acc.createdAt, greaterThan(0));
       expect(acc.createdAt, acc.updatedAt);
+    });
+
+    test('migrates legacy accounts with claim scope defaults', () async {
+      final path = '${tmpdir.path}/legacy.db';
+      final db = await getDb(dbPath: path);
+      await db.execute('DROP TABLE IF EXISTS accounts');
+      await db.execute('''
+CREATE TABLE accounts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone      TEXT NOT NULL UNIQUE,
+    name       TEXT DEFAULT '',
+    remark     TEXT DEFAULT '',
+    enabled    INTEGER DEFAULT 1,
+    auth_token TEXT DEFAULT NULL,
+    user_id    INTEGER DEFAULT 0,
+    device_id  TEXT NOT NULL,
+    password   TEXT DEFAULT '',
+    last_mobile_claim REAL DEFAULT 0,
+    last_translate_claim REAL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+)
+      ''');
+      await db.close();
+
+      final migrated = await initDb(dbPath: path);
+      await migrated.insert('accounts', {
+        'phone': '13800138001',
+        'device_id': 'legacy_device',
+        'created_at': 1.0,
+        'updated_at': 1.0,
+      });
+      final rows = await migrated.query(
+        'accounts',
+        where: 'phone = ?',
+        whereArgs: ['13800138001'],
+        limit: 1,
+      );
+      expect(rows, isNotEmpty);
+      final acc = Account.fromRow(rows.first);
+      expect(acc.claimPc, isTrue);
+      expect(acc.claimMobile, isTrue);
+      expect(acc.claimTranslate, isFalse);
+      await migrated.close();
     });
 
     test('add account duplicate phone', () async {
@@ -143,6 +190,41 @@ void main() {
       expect(acc.name, '新名称');
       expect(acc.remark, '新备注');
       expect(acc.updatedAt, greaterThan(acc.createdAt));
+    });
+
+    test('update claim scope', () async {
+      await addAccount('13800138000');
+      final result = await updateAccount(
+        '13800138000',
+        claimPc: false,
+        claimMobile: true,
+        claimTranslate: true,
+      );
+      expect(result, isTrue);
+      final acc = (await getAccount('13800138000'))!;
+      expect(acc.claimPc, isFalse);
+      expect(acc.claimMobile, isTrue);
+      expect(acc.claimTranslate, isTrue);
+    });
+
+    test('batch update claim scope', () async {
+      await addAccount('13800000001');
+      await addAccount('13800000002');
+      final count = await updateAccountsClaimScope(
+        ['13800000001', '13800000002'],
+        pc: false,
+        mobile: true,
+        translate: true,
+      );
+      expect(count, 2);
+      final a = (await getAccount('13800000001'))!;
+      final b = (await getAccount('13800000002'))!;
+      expect(a.claimPc, isFalse);
+      expect(a.claimMobile, isTrue);
+      expect(a.claimTranslate, isTrue);
+      expect(b.claimPc, isFalse);
+      expect(b.claimMobile, isTrue);
+      expect(b.claimTranslate, isTrue);
     });
 
     test('update account not found', () async {

@@ -38,6 +38,25 @@ const String statusAlreadyDone = 'already_done';
 const String statusAuthError = 'auth_error';
 const String statusNeedLogin = 'need_login';
 const String statusError = 'error';
+const String statusSkipped = 'skipped';
+
+/// 当前按钮目标是否匹配账号勾选的 PC 范围。
+bool shouldRunPc(Account account, String target) =>
+    account.claimPc && (target == 'all' || target == 'pc');
+
+/// 当前按钮目标是否匹配账号勾选的手机范围。
+bool shouldRunMobile(Account account, String target) =>
+    account.claimMobile && (target == 'all' || target == 'mobile');
+
+/// 当前按钮目标是否匹配账号勾选的翻译范围。
+bool shouldRunTranslate(Account account, String target) =>
+    account.claimTranslate && (target == 'all' || target == 'translate');
+
+/// 计算 callback 间等待时长：基础间隔 ±1 秒，最低为 0。
+Duration jitteredCallbackDelay(Duration base, Random random) {
+  final jitterMs = random.nextInt(2001) - 1000;
+  return Duration(milliseconds: max(0, base.inMilliseconds + jitterMs));
+}
 
 /// 日志输出（可替换；默认 print）。
 void Function(String message) logger = print;
@@ -179,7 +198,7 @@ Future<ApiClient> initClient(Account account) async {
 
 /// 对单个账号执行完整领取流程。
 ///
-/// [target] 领取目标："all" / "pc" / "mobile" / "translate"。
+/// [target] 领取目标："all" 按账号勾选范围，或 "pc" / "mobile" / "translate" 快捷过滤。
 /// [source] 来源标识（"service" 或 "gui"），影响数据库记录的 source 字段。
 Future<ClaimResult> claimForAccount(
   Account account, {
@@ -191,6 +210,16 @@ Future<ClaimResult> claimForAccount(
   final s = settings ?? await getSettings();
   final phone = account.phone;
   final result = ClaimResult(phone: phone);
+
+  final runPc = shouldRunPc(account, target);
+  final runMobile = shouldRunMobile(account, target);
+  final runTranslate = shouldRunTranslate(account, target);
+  if (!runPc && !runMobile && !runTranslate) {
+    result
+      ..status = statusSkipped
+      ..errorMsg = '未配置该领取范围';
+    return result;
+  }
 
   // 1. 初始化客户端
   _report(progressCallback, phone, 'init', '初始化客户端');
@@ -205,9 +234,6 @@ Future<ClaimResult> claimForAccount(
   var totalClaimed = 0;
   var totalFailed = 0;
   var total = 0;
-  final runPc = target == 'all' || target == 'pc';
-  final runMobile = target == 'all' || target == 'mobile';
-  final runTranslate = target == 'all' || target == 'translate';
 
   // ── PC 端领取 ──
   if (runPc) {
@@ -399,6 +425,7 @@ Future<(int, int)> _claimBusinessPhase(
   final backupRequestInterval =
       Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final maxRounds = settings.maxRounds;
+  final random = Random();
 
   while (roundNum < maxRounds) {
     // 检查 token
@@ -453,7 +480,9 @@ Future<(int, int)> _claimBusinessPhase(
     }
 
     // 等待间隔
-    await Future<void>.delayed(backupRequestInterval);
+    await Future<void>.delayed(
+      jitteredCallbackDelay(backupRequestInterval, random),
+    );
 
     // 再查任务 → 比较全局未观看数量变化
     final config2 = await client.fetchPcAdConfig();
@@ -503,6 +532,7 @@ Future<(int, int)> _claimMobilePhase(
   final backupRequestInterval =
       Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final mobileMaxRounds = settings.mobileMaxRounds;
+  final random = Random();
 
   int countPending(AdActivityResponse activity) => activity.videoBar
       .where((t) => t.hasAward && !t.isGet)
@@ -573,7 +603,9 @@ Future<(int, int)> _claimMobilePhase(
       failed += 1;
     }
 
-    await Future<void>.delayed(backupRequestInterval);
+    await Future<void>.delayed(
+      jitteredCallbackDelay(backupRequestInterval, random),
+    );
 
     // 再查手机端任务
     final activity2 = await client.fetchMobileAdActivity();
@@ -627,6 +659,7 @@ Future<(int, int)> _claimTranslatePhase(
       Duration(milliseconds: (settings.backupRequestInterval * 1000).round());
   final translateMaxRounds = max(1, settings.translateMaxRounds);
   final translateRetryLimit = max(1, settings.translateRetryLimit);
+  final random = Random();
 
   while (roundNum < translateMaxRounds) {
     if (client.authToken == null) {
@@ -692,7 +725,9 @@ Future<(int, int)> _claimTranslatePhase(
       failed += 1;
     }
 
-    await Future<void>.delayed(backupRequestInterval);
+    await Future<void>.delayed(
+      jitteredCallbackDelay(backupRequestInterval, random),
+    );
 
     // 3. 再次查询配置 → 比较进度变化
     final config2 = await client.fetchTranslateAdConfig();
@@ -836,6 +871,7 @@ Future<void> _saveClaimRecord(
   ClaimResult result,
   String source,
 ) async {
+  if (result.status == statusSkipped) return;
   try {
     var detail = result.errorMsg ?? '';
     if (result.status == statusOk) {

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../endfield.dart';
@@ -5,6 +7,7 @@ import '../store/accounts_store.dart';
 import '../store/claim_store.dart';
 import '../store/stores.dart';
 import '../widgets/account_dialog.dart';
+import '../widgets/claim_scope_controls.dart';
 import '../widgets/ef_button.dart';
 import '../widgets/ef_dialog.dart';
 import '../widgets/ef_grid_painter.dart';
@@ -124,7 +127,7 @@ class _ActionStrip extends StatelessWidget {
           child: Row(
             children: [
               EfButton(
-                label: running ? '${claimStore.targetLabel}…' : '全部领取',
+                label: running ? '${claimStore.targetLabel}…' : '按配置领取',
                 primary: true,
                 onPressed: running ? null : () => _claim(context, 'all'),
               ),
@@ -211,8 +214,140 @@ class _SectionHeader extends StatelessWidget {
 
 // ── 账号区 ────────────────────────────────────────────────────
 
-class _AccountsSection extends StatelessWidget {
+class _AccountsSection extends StatefulWidget {
   const _AccountsSection();
+
+  @override
+  State<_AccountsSection> createState() => _AccountsSectionState();
+}
+
+class _AccountsSectionState extends State<_AccountsSection> {
+  final Set<String> _flipped = {};
+  final Set<String> _selected = {};
+  final Map<String, ClaimScope> _drafts = {};
+  bool _selectionMode = false;
+
+  static const _defaultScope = (pc: true, mobile: true, translate: false);
+
+  ClaimScope _scopeOf(AccountStatus status) => (
+        pc: status.account.claimPc,
+        mobile: status.account.claimMobile,
+        translate: status.account.claimTranslate,
+      );
+
+  void _toggleFlip(String phone) {
+    setState(() {
+      if (!_flipped.add(phone)) _flipped.remove(phone);
+    });
+  }
+
+  void _startSelection(String phone) {
+    setState(() {
+      _selectionMode = true;
+      _selected.add(phone);
+      _flipped.remove(phone);
+    });
+  }
+
+  void _toggleSelection(String phone) {
+    setState(() {
+      if (!_selected.add(phone)) _selected.remove(phone);
+      if (_selected.isEmpty) _selectionMode = false;
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selectionMode = false;
+      _selected.clear();
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll(accountsStore.accounts.map((a) => a.phone));
+    });
+  }
+
+  void _invertSelection() {
+    setState(() {
+      final allPhones = accountsStore.accounts.map((a) => a.phone).toSet();
+      final inverted = allPhones.difference(_selected);
+      _selected
+        ..clear()
+        ..addAll(inverted);
+    });
+  }
+
+  void _updateScope(String phone, ClaimScope scope) {
+    setState(() => _drafts[phone] = scope);
+  }
+
+  ClaimScope _draftScope(String phone) {
+    final draft = _drafts[phone];
+    if (draft != null) return draft;
+    final status =
+        accountsStore.accounts.where((a) => a.phone == phone).firstOrNull;
+    return status == null ? _defaultScope : _scopeOf(status);
+  }
+
+  Future<void> _saveScope(String phone, BuildContext context) async {
+    final scope = _draftScope(phone);
+    await accountsStore.saveScope(
+      phone,
+      pc: scope.pc,
+      mobile: scope.mobile,
+      translate: scope.translate,
+    );
+    if (!context.mounted) return;
+    setState(() {
+      _flipped.remove(phone);
+      _drafts.remove(phone);
+    });
+    EfToast.show(context, '已保存', type: EfToastType.ok);
+  }
+
+  Future<void> _saveAll(BuildContext context) async {
+    final first = _flipped.isEmpty ? null : _flipped.first;
+    if (first == null) return;
+    final scope = _draftScope(first);
+    await accountsStore.applyScopeToAll(
+      pc: scope.pc,
+      mobile: scope.mobile,
+      translate: scope.translate,
+    );
+    if (!context.mounted) return;
+    setState(() {
+      _flipped.clear();
+      _drafts.clear();
+    });
+    EfToast.show(context, '已应用到所有账号', type: EfToastType.ok);
+  }
+
+  Future<void> _openBatchDialog(BuildContext context) async {
+    final firstPhone = _selected.first;
+    final result = await _showBatchScopeDialog(
+      context,
+      _draftScope(firstPhone),
+      _selected.length,
+    );
+    if (result == null || !mounted) return;
+    await accountsStore.saveScopeForPhones(
+      _selected,
+      pc: result.pc,
+      mobile: result.mobile,
+      translate: result.translate,
+    );
+    if (!context.mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selected.clear();
+      _drafts.clear();
+    });
+    EfToast.show(context, '已应用', type: EfToastType.ok);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -220,6 +355,7 @@ class _AccountsSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _SectionHeader('01', 'ACCOUNTS', '账号'),
+        if (_selectionMode) _selectionDock(context),
         ListenableBuilder(
           listenable: accountsStore,
           builder: (context, _) {
@@ -239,14 +375,34 @@ class _AccountsSection extends StatelessWidget {
               );
             }
             return SizedBox(
-              // 账号卡片内容（时长块 + 三行进度）需要约 188px，172 会导致底部溢出
-              height: 188,
+              // 背面固定控件（3 个 40px checkbox + 两个按钮）需要 248px。
+              height: 248,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: accountsStore.accounts.length,
                 separatorBuilder: (_, _) => const SizedBox(width: 10),
-                itemBuilder: (context, i) =>
-                    _AccountCard(status: accountsStore.accounts[i]),
+                itemBuilder: (context, i) {
+                  final status = accountsStore.accounts[i];
+                  final phone = status.phone;
+                  return _AccountCard(
+                    status: status,
+                    flipped: _flipped.contains(phone),
+                    scope: _draftScope(phone),
+                    selectionMode: _selectionMode,
+                    selected: _selected.contains(phone),
+                    selectionIndex:
+                        _selected.toList().indexOf(phone) + 1,
+                    onTap: _selectionMode
+                        ? () => _toggleSelection(phone)
+                        : () => _toggleFlip(phone),
+                    onLongPress: _selectionMode
+                        ? () => _toggleSelection(phone)
+                        : () => _startSelection(phone),
+                    onScopeChanged: (scope) => _updateScope(phone, scope),
+                    onSave: () => _saveScope(phone, context),
+                    onSaveAll: () => _saveAll(context),
+                  );
+                },
               ),
             );
           },
@@ -254,12 +410,92 @@ class _AccountsSection extends StatelessWidget {
       ],
     );
   }
+
+  Widget _selectionDock(BuildContext context) {
+    return Container(
+      height: 42,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      color: Ef.ink,
+      child: Row(
+        children: [
+          Text(
+            'SELECT ${_selected.length}',
+            style: Ef.micro(color: Ef.signal, size: 10),
+          ),
+          const Spacer(),
+          _DockTextButton(label: '全选', onPressed: _selectAll),
+          const SizedBox(width: 8),
+          _DockTextButton(label: '反选', onPressed: _invertSelection),
+          const SizedBox(width: 8),
+          _DockTextButton(
+            label: '批量设置',
+            onPressed: _selected.isEmpty
+                ? null
+                : () => _openBatchDialog(context),
+          ),
+          const SizedBox(width: 8),
+          _DockTextButton(label: '取消', onPressed: _exitSelection),
+        ],
+      ),
+    );
+  }
+}
+
+class _DockTextButton extends StatelessWidget {
+  const _DockTextButton({required this.label, this.onPressed});
+
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: onPressed == null ? Ef.muted : Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 30),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        label,
+        style: Ef.body(
+          color: onPressed == null ? Ef.muted : Colors.white,
+          size: 12,
+          weight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
 }
 
 class _AccountCard extends StatelessWidget {
-  const _AccountCard({required this.status});
+  const _AccountCard({
+    required this.status,
+    required this.flipped,
+    required this.scope,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onScopeChanged,
+    required this.onSave,
+    required this.onSaveAll,
+    this.selectionMode = false,
+    this.selected = false,
+    this.selectionIndex = 0,
+  });
 
   final AccountStatus status;
+  final bool flipped;
+  final ClaimScope scope;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final ValueChanged<ClaimScope> onScopeChanged;
+  final VoidCallback onSave;
+  final VoidCallback onSaveAll;
+  final bool selectionMode;
+  final bool selected;
+  final int selectionIndex;
 
   static String _maskPhone(String p) =>
       p.length > 6 ? '${p.substring(0, 3)}****${p.substring(p.length - 4)}' : p;
@@ -285,16 +521,69 @@ class _AccountCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: SizedBox(
+        width: 220,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: flipped ? pi : 0),
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 400),
+          curve: Curves.easeInOutCubic,
+          builder: (context, angle, _) {
+            final frontOpacity = cos(angle).clamp(0.0, 1.0);
+            final backOpacity = 1 - frontOpacity;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..setEntry(3, 2, 0.001)
+                    ..rotateY(angle),
+                  child: Opacity(
+                    opacity: frontOpacity,
+                    child: IgnorePointer(
+                      ignoring: frontOpacity == 0,
+                      child: _buildFront(),
+                    ),
+                  ),
+                ),
+                Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..setEntry(3, 2, 0.001)
+                    ..rotateY(angle + pi),
+                  child: Opacity(
+                    opacity: backOpacity,
+                    child: IgnorePointer(
+                      ignoring: backOpacity == 0,
+                      child: _buildBack(),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFront() {
     final s = status;
     return Container(
-      width: 208,
+      key: ValueKey('front-${s.phone}'),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.55),
-        border: Border.all(color: Ef.paperEdge),
+        border: Border.all(color: selected ? Ef.signal : Ef.paperEdge),
       ),
       child: Row(
         children: [
-          Container(width: 4, color: _statusColor),
+          Container(width: 4, color: selected ? Ef.signal : _statusColor),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
@@ -303,6 +592,24 @@ class _AccountCard extends StatelessWidget {
                 children: [
                   Row(
                     children: [
+                      if (selectionMode) ...[
+                        Container(
+                          width: 18,
+                          height: 18,
+                          color: selected ? Ef.signal : Ef.ink,
+                          child: Center(
+                            child: Text(
+                              selected ? '$selectionIndex' : '',
+                              style: Ef.num(
+                                color:
+                                    selected ? Ef.ink : Colors.white,
+                                size: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
                       Expanded(
                         child: Text(
                           _maskPhone(s.phone),
@@ -333,8 +640,7 @@ class _AccountCard extends StatelessWidget {
                   else
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Text('NEED AUTH',
-                          style: Ef.micro(size: 9)),
+                      child: Text('NEED AUTH', style: Ef.micro(size: 9)),
                     ),
                   const Spacer(),
                   _progressRow('PC', s.current, s.total),
@@ -345,6 +651,54 @@ class _AccountCard extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBack() {
+    final s = status;
+    return Container(
+      key: ValueKey('back-${s.phone}'),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.62),
+        border: Border.all(color: selected ? Ef.signal : Ef.ink),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _maskPhone(s.phone),
+                  style: Ef.num(size: 12, weight: FontWeight.w700),
+                ),
+              ),
+              Text('SCOPE', style: Ef.micro(size: 8)),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text('领取范围 CLAIM SCOPE', style: Ef.micro(size: 8)),
+          const SizedBox(height: 4),
+          ClaimScopeControls(
+            scope: scope,
+            onChanged: onScopeChanged,
+          ),
+          const Spacer(),
+          EfButton(
+            label: '保存',
+            primary: true,
+            compact: true,
+            onPressed: onSave,
+          ),
+          const SizedBox(height: 6),
+          EfButton(
+            label: '应用到所有账号',
+            compact: true,
+            onPressed: onSaveAll,
           ),
         ],
       ),
@@ -369,6 +723,55 @@ class _AccountCard extends StatelessWidget {
       ],
     );
   }
+}
+
+Future<ClaimScope?> _showBatchScopeDialog(
+  BuildContext context,
+  ClaimScope initial,
+  int count,
+) {
+  return showEfDialog<ClaimScope>(
+    context,
+    title: '批量配置',
+    en: 'BATCH SCOPE',
+    width: 340,
+    child: Builder(
+      builder: (ctx) {
+        var scope = initial;
+        return StatefulBuilder(
+          builder: (context, setState) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '应用到 $count 个账号',
+                style: Ef.body(size: 12, color: Ef.muted),
+              ),
+              const SizedBox(height: 8),
+              ClaimScopeControls(
+                scope: scope,
+                onChanged: (value) => setState(() => scope = value),
+              ),
+              EfDialogActions(
+                children: [
+                  EfButton(
+                    label: '应用',
+                    primary: true,
+                    compact: true,
+                    onPressed: () => Navigator.of(ctx).pop(scope),
+                  ),
+                  EfButton(
+                    label: '取消',
+                    compact: true,
+                    onPressed: () => Navigator.of(ctx).pop(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
 }
 
 /// 账号卡片操作按钮：⋯ 菜单（登录/编辑/启停）+ × 删除。
@@ -545,6 +948,7 @@ class _ClaimCard extends StatelessWidget {
   Color get _statusColor => switch (state.status) {
         'running' => Ef.signal,
         'done' || 'already_done' => Ef.stateOk,
+        'skipped' => Ef.muted,
         'error' || 'auth_error' => Ef.error,
         'need_login' => Ef.muted,
         _ => Ef.muted,
@@ -555,6 +959,7 @@ class _ClaimCard extends StatelessWidget {
         'running' => '进行中',
         'done' => '完成',
         'already_done' => '已完成',
+        'skipped' => '已跳过',
         'error' => '错误',
         'auth_error' => '认证失败',
         'need_login' => '需登录',

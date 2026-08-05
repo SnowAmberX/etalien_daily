@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     password   TEXT DEFAULT '',
     last_mobile_claim REAL DEFAULT 0,
     last_translate_claim REAL DEFAULT 0,
+    claim_pc INTEGER DEFAULT 1,
+    claim_mobile INTEGER DEFAULT 1,
+    claim_translate INTEGER DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -156,6 +159,9 @@ Future<Database> initDb({String? dbPath}) async {
   await _ensureColumn(db, 'accounts', "password TEXT DEFAULT ''");
   await _ensureColumn(db, 'accounts', 'last_mobile_claim REAL DEFAULT 0');
   await _ensureColumn(db, 'accounts', 'last_translate_claim REAL DEFAULT 0');
+  await _ensureColumn(db, 'accounts', 'claim_pc INTEGER DEFAULT 1');
+  await _ensureColumn(db, 'accounts', 'claim_mobile INTEGER DEFAULT 1');
+  await _ensureColumn(db, 'accounts', 'claim_translate INTEGER DEFAULT 0');
   // 幂等迁移（2026-08-04 风控更新）：旧版补发间隔键 request_interval 已废弃，
   // 统一迁移为 backup_request_interval=10.0，无论旧值是多少都重置为 10 秒，
   // 避免触发 24h×7 补发接口风控。
@@ -222,6 +228,9 @@ class Account {
     this.password = '',
     this.lastMobileClaim = 0.0,
     this.lastTranslateClaim = 0.0,
+    this.claimPc = true,
+    this.claimMobile = true,
+    this.claimTranslate = false,
     this.createdAt = 0.0,
     this.updatedAt = 0.0,
   });
@@ -239,6 +248,9 @@ class Account {
         lastMobileClaim: (row['last_mobile_claim'] as num?)?.toDouble() ?? 0.0,
         lastTranslateClaim:
             (row['last_translate_claim'] as num?)?.toDouble() ?? 0.0,
+        claimPc: (row['claim_pc'] as int? ?? 1) != 0,
+        claimMobile: (row['claim_mobile'] as int? ?? 1) != 0,
+        claimTranslate: (row['claim_translate'] as int? ?? 0) != 0,
         createdAt: (row['created_at'] as num).toDouble(),
         updatedAt: (row['updated_at'] as num).toDouble(),
       );
@@ -254,6 +266,9 @@ class Account {
   String password;
   double lastMobileClaim;
   double lastTranslateClaim;
+  bool claimPc;
+  bool claimMobile;
+  bool claimTranslate;
   double createdAt;
   double updatedAt;
 
@@ -268,6 +283,9 @@ class Account {
         'enabled': enabled,
         'user_id': userId,
         'device_id': deviceId,
+        'claim_pc': claimPc,
+        'claim_mobile': claimMobile,
+        'claim_translate': claimTranslate,
         'created_at': createdAt,
         'updated_at': updatedAt,
         'has_password': hasPassword,
@@ -348,6 +366,9 @@ Future<Account> addAccount(
     remark: remark,
     deviceId: did,
     password: password,
+    claimPc: true,
+    claimMobile: true,
+    claimTranslate: false,
     createdAt: now,
     updatedAt: now,
   );
@@ -365,6 +386,9 @@ Future<bool> updateAccount(
   String? password,
   double? lastMobileClaim,
   double? lastTranslateClaim,
+  bool? claimPc,
+  bool? claimMobile,
+  bool? claimTranslate,
   String? dbPath,
 }) async {
   final updates = <String, Object?>{};
@@ -379,6 +403,11 @@ Future<bool> updateAccount(
   if (lastTranslateClaim != null) {
     updates['last_translate_claim'] = lastTranslateClaim;
   }
+  if (claimPc != null) updates['claim_pc'] = claimPc ? 1 : 0;
+  if (claimMobile != null) updates['claim_mobile'] = claimMobile ? 1 : 0;
+  if (claimTranslate != null) {
+    updates['claim_translate'] = claimTranslate ? 1 : 0;
+  }
   if (updates.isEmpty) return false;
 
   updates['updated_at'] = DateTime.now().millisecondsSinceEpoch / 1000.0;
@@ -390,6 +419,26 @@ Future<bool> updateAccount(
     [...updates.values, phone],
   );
   return count > 0;
+}
+
+/// 批量更新多个账号的领取范围。
+Future<int> updateAccountsClaimScope(
+  List<String> phones, {
+  required bool pc,
+  required bool mobile,
+  required bool translate,
+  String? dbPath,
+}) async {
+  if (phones.isEmpty) return 0;
+  final db = await getDb(dbPath: dbPath);
+  final placeholders = List.filled(phones.length, '?').join(', ');
+  final now = DateTime.now().millisecondsSinceEpoch / 1000.0;
+  return db.rawUpdate(
+    'UPDATE accounts '
+    'SET claim_pc = ?, claim_mobile = ?, claim_translate = ?, updated_at = ? '
+    'WHERE phone IN ($placeholders)',
+    [pc ? 1 : 0, mobile ? 1 : 0, translate ? 1 : 0, now, ...phones],
+  );
 }
 
 /// 登录成功后保存 token 和 user_id。

@@ -2,6 +2,7 @@
 ///
 /// 由 Windows Service / schtasks 定时触发，或手动执行：
 ///   etalien_headless.exe [--scheduled] [--account <phone>] [--target all|pc|mobile|translate]
+///   all 按账号配置的领取范围执行；pc/mobile/translate 按对应目标过滤。
 ///
 /// 退出码（对照 v1 main.py）：
 ///   0 全部成功 / 1 部分成功 / 2 全部失败 / 3 需要登录 / 4 无启用账号 / 5 网络错误

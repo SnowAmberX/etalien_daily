@@ -17,7 +17,7 @@ class ClaimCardState {
   final String phone;
   String name;
 
-  /// waiting / running / done / already_done / error / need_login
+  /// waiting / running / done / already_done / skipped / error / need_login
   String status = 'waiting';
   String step = '';
   String detail = '等待开始';
@@ -67,7 +67,7 @@ class ClaimStore extends ChangeNotifier {
       'pc' => '仅 PC',
       'mobile' => '仅手机',
       'translate' => '翻译',
-      _ => '全部领取',
+      _ => '按配置领取',
     };
     _runId = _newRunId();
     notifyListeners();
@@ -144,6 +144,7 @@ class ClaimStore extends ChangeNotifier {
   String _resultDetail(ClaimResult r) => switch (r.status) {
         statusOk => '领取完成',
         statusAlreadyDone => '所有广告已观看完毕',
+        statusSkipped => '未配置该领取范围',
         statusNeedLogin => '需要登录',
         statusAuthError => '认证失败',
         _ => r.errorMsg ?? '错误',
@@ -155,6 +156,7 @@ class ClaimStore extends ChangeNotifier {
       return '完成 +${_fmtDuration(gained)}';
     }
     if (r.status == statusAlreadyDone) return '已完成';
+    if (r.status == statusSkipped) return '已跳过';
     if (r.status == statusNeedLogin) return '需要登录';
     return '错误: ${r.errorMsg ?? ''}';
   }
