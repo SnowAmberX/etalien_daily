@@ -10,9 +10,21 @@
 
 ## 简介
 
-- **v2 已用 Flutter 重构**（Windows 桌面端），核心业务由 Dart 实现，无边框窗口 + Endfield 风格浅色 UI。
-- **v1（旧 Python 版本）完整归档在 `v1/` 目录**，仅作存档，不再维护。
+- **本项目基于 [etalien-auto](https://github.com/JiangXu26710/etalien-auto) 重写**，将原 Python 桌面应用迁移为 Flutter / Dart Windows 桌面端，核心业务由 Dart 实现。
+- **上一版 Python 实现完整归档在 `v1/` 目录**，仅作存档，不再维护。
 - v2 与 v1 **共用 `config/etalien.db`**：账号、token、领取历史、设置互通，升级后直接读取原有数据。
+
+## 参考
+
+本项目重写自 [etalien-auto](https://github.com/JiangXu26710/etalien-auto)，主要变更：
+
+- Python + pywebview/Flask → Flutter / Dart Windows 原生桌面端
+- 网页式界面 → Endfield 风格 Flutter UI
+- 单进程 GUI → GUI + headless，共用 `config/etalien.db`
+- 全局领取 → 账号级 PC / 手机 / 翻译配置 + 批量配置
+- 普通用户定时任务 → `SYSTEM` + 最高权限非交互运行 + Windows Service
+- 新增补发接口风控、`±1s` 随机回调浮动、防死循环、`skipped` 状态
+- SQLite 数据结构兼容，上一版 Python 实现归档在 `v1/`
 
 ## 功能
 
