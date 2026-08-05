@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:etalien_daily/core/database.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late Directory tmpdir;
@@ -51,6 +52,36 @@ void main() {
       expect(s.backupRequestInterval, 10.0);
       expect(s.maxRounds, 21);
       expect(s.scheduleTime, '08:00');
+    });
+  });
+
+  group('resolveReleaseConfigDir', () {
+    test('gui exe at root uses root config', () {
+      expect(
+        resolveReleaseConfigDir(r'D:\app\etalien_daily.exe'),
+        p.join(r'D:\app', 'config'),
+      );
+    });
+
+    test('headless in bin uses shared root config', () {
+      expect(
+        resolveReleaseConfigDir(r'D:\app\bin\etalien_headless.exe'),
+        p.join(r'D:\app', 'config'),
+      );
+    });
+
+    test('generic headless in bin uses shared root config', () {
+      expect(
+        resolveReleaseConfigDir(r'D:\app\bin\headless.exe'),
+        p.join(r'D:\app', 'config'),
+      );
+    });
+
+    test('non-headless exe in bin keeps bin config', () {
+      expect(
+        resolveReleaseConfigDir(r'D:\app\bin\tool.exe'),
+        p.join(r'D:\app\bin', 'config'),
+      );
     });
   });
 

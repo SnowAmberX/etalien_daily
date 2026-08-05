@@ -23,6 +23,21 @@ const bool _isRelease = bool.fromEnvironment('dart.vm.product');
 String? _defaultConfigDir;
 Database? _db;
 
+/// Release 模式下根据 exe 路径确定共享配置目录。
+///
+/// GUI 位于程序根目录；headless 位于 bin 子目录，必须回退到根目录 config，
+/// 否则 GUI 与计划任务会各自使用独立数据库。
+String resolveReleaseConfigDir(String exePath) {
+  final exeDir = p.dirname(exePath);
+  final exeName = p.basename(exePath).toLowerCase();
+  final isHeadless =
+      exeName == 'etalien_headless.exe' || exeName == 'headless.exe';
+  final inBin = p.basename(exeDir).toLowerCase() == 'bin';
+  return isHeadless && inBin
+      ? p.join(p.dirname(exeDir), 'config')
+      : p.join(exeDir, 'config');
+}
+
 /// 设置自定义配置目录（用于测试）。传 null 恢复默认。
 void setConfigDir(String? path) {
   _defaultConfigDir = path;
@@ -35,8 +50,8 @@ String getDbPath() {
   if (envDir != null && envDir.isNotEmpty) {
     configDir = envDir;
   } else if (_isRelease) {
-    // 打包后：使用 EXE 同级目录下的 config/
-    configDir = p.join(p.dirname(Platform.resolvedExecutable), 'config');
+    // 打包后：GUI 使用自身目录下的 config，headless 使用程序根目录的 config。
+    configDir = resolveReleaseConfigDir(Platform.resolvedExecutable);
   } else if (_defaultConfigDir != null) {
     configDir = _defaultConfigDir!;
   } else {

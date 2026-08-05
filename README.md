@@ -21,7 +21,7 @@
 - **三种领取目标** — PC 时长 / 手机时长 / 翻译次数
 - **登录** — 短信验证码 / 账号密码双方式，token 过期可用密码自动重登
 - **SQLite 存储** — 账号、设置、领取历史、过程事件，WAL 模式并发读写，与 v1 共用同一数据库
-- **定时领取** — schtasks（默认，免管理员）与 Windows Service 两种模式
+- **定时领取** — schtasks（默认，以 SYSTEM 非交互运行，需要管理员创建）与 Windows Service 两种模式
 - **无头模式** — 独立无头程序供定时任务 / 服务调用，退出码对齐 v1
 - **防死循环** — 连续 3 轮无进展自动停止
 
@@ -66,7 +66,7 @@ etalien_headless.exe [--scheduled] [--account <phone>] [--target all|pc|mobile|t
 
 在 GUI 设置中切换两种模式：
 
-- **Schtasks（默认）** — Windows 计划任务，无需管理员权限
+- **Schtasks（默认）** — Windows 计划任务，以 SYSTEM 非交互运行，用户未登录也会领取；创建/覆盖任务需要管理员权限
 - **Windows Service** — 以后台服务方式运行，更稳定，重启后自动恢复；安装 / 卸载需要以管理员身份运行程序
 
 ## 设置

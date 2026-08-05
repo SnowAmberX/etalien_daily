@@ -19,6 +19,26 @@ String headlessExePath() {
 /// schtasks 要执行的命令行。
 String schtaskCommand() => '"${headlessExePath()}" --scheduled';
 
+/// schtasks /create 参数。
+///
+/// SYSTEM 账户 + 非交互运行：用户未登录时也会执行，且 headless 不显示终端。
+List<String> schtaskCreateArgs(String scheduleTime) => [
+      '/create',
+      '/tn',
+      kSchtaskName,
+      '/tr',
+      schtaskCommand(),
+      '/sc',
+      'daily',
+      '/st',
+      scheduleTime,
+      '/ru',
+      'SYSTEM',
+      '/rl',
+      'HIGHEST',
+      '/f',
+    ];
+
 /// 查询定时任务是否存在。
 Future<bool> schtaskExists() async {
   try {
@@ -32,18 +52,7 @@ Future<bool> schtaskExists() async {
 /// 创建/覆盖每日定时任务。成功返回 null，失败返回错误信息。
 Future<String?> schtaskCreate(String scheduleTime) async {
   try {
-    final r = await Process.run('schtasks', [
-      '/create',
-      '/tn',
-      kSchtaskName,
-      '/tr',
-      schtaskCommand(),
-      '/sc',
-      'daily',
-      '/st',
-      scheduleTime,
-      '/f',
-    ]);
+    final r = await Process.run('schtasks', schtaskCreateArgs(scheduleTime));
     if (r.exitCode != 0) {
       final err = (r.stderr as String).trim();
       return err.isEmpty ? 'schtasks /create 失败 (${r.exitCode})' : err;
